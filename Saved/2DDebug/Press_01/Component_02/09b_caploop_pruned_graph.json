@@ -1,0 +1,31 @@
+{
+  "nodes": [
+    {"id": 0, "pos": [719.00, 571.00]},
+    {"id": 1, "pos": [649.00, 567.00]},
+    {"id": 2, "pos": [517.00, 589.00]},
+    {"id": 3, "pos": [720.00, 767.00]},
+    {"id": 4, "pos": [509.80, 773.00]},
+    {"id": 5, "pos": [641.00, 485.00]},
+    {"id": 6, "pos": [790.00, 574.00]},
+    {"id": 7, "pos": [1627.00, 750.00]},
+    {"id": 8, "pos": [410.00, 219.00]}
+  ],
+  "edges": [
+    {"stroke_id": 74, "u": 0, "v": 1, "color": "red", "kept": true},
+    {"stroke_id": 75, "u": 0, "v": 0, "color": "red", "kept": true},
+    {"stroke_id": 76, "u": 1, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 81, "u": 0, "v": 3, "color": "red", "kept": true},
+    {"stroke_id": 82, "u": 3, "v": 3, "color": "red", "kept": true},
+    {"stroke_id": 83, "u": 2, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 84, "u": 2, "v": 4, "color": "red", "kept": true},
+    {"stroke_id": 38, "u": 5, "v": 1, "color": "black", "kept": false},
+    {"stroke_id": 77, "u": 1, "v": 1, "color": "black", "kept": true},
+    {"stroke_id": 78, "u": 1, "v": 0, "color": "black", "kept": true},
+    {"stroke_id": 80, "u": 6, "v": 0, "color": "black", "kept": false},
+    {"stroke_id": 86, "u": 3, "v": 3, "color": "black", "kept": true},
+    {"stroke_id": 87, "u": 3, "v": 7, "color": "black", "kept": false},
+    {"stroke_id": 92, "u": 8, "v": 4, "color": "black", "kept": false},
+    {"stroke_id": 93, "u": 4, "v": 4, "color": "black", "kept": true},
+    {"stroke_id": 94, "u": 3, "v": 4, "color": "black", "kept": true}
+  ]
+}

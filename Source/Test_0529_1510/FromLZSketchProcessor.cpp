@@ -8,7 +8,7 @@
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 
-void FFromLZSketchProcessor::ProcessLatestSketch()
+void FFromLZSketchProcessor::ProcessLatestSketch(UWorld* World)
 {
 	const FString SketchDir = FPaths::ProjectSavedDir() / TEXT("FromSketch");
 	const FString CaptureDir = FPaths::ProjectSavedDir() / TEXT("FromLZCaptures");
@@ -122,9 +122,11 @@ void FFromLZSketchProcessor::ProcessLatestSketch()
 			Source.CaptureStem = CaptureStem;
 			Source.CapturePngRel = TEXT("FromLZCaptures/") + FPaths::GetCleanFilename(CapturePng);
 			Source.CaptureJsonRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT(".json");
+			Source.FacesPngRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT("_faces.png");
+			Source.FacesJsonRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT("_faces.json");
 		}
 
-		FFromLZSketch2DProcessor::ProcessCompositeAsync(Composite, SW, SH, TwoDDebugDir, Source);
+		FFromLZSketch2DProcessor::ProcessCompositeAsync(Composite, SW, SH, TwoDDebugDir, Source, World);
 	}
 
 	// 4) Continue with red/green/blue line decomposition, now from the composite.

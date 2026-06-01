@@ -1,6 +1,7 @@
 #include "FromLZSketch2DProcessor.h"
 
 #include "Async/Async.h"
+#include "FromLZFaceReconstructor.h"
 #include "FromLZImageOps.h"
 #include "HAL/FileManager.h"
 #include "HAL/PlatformTime.h"
@@ -11,20 +12,21 @@
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 
-void FFromLZSketch2DProcessor::ProcessCompositeAsync(TArray<uint8> RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source)
+void FFromLZSketch2DProcessor::ProcessCompositeAsync(TArray<uint8> RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source, UWorld* World)
 {
 	// RGBA is taken by value; move it into the async task so the heavy work runs off the game thread.
 	const FString DebugDirCopy = DebugDir;
 	const FSketchSourceInfo SourceCopy = Source;
+	const TWeakObjectPtr<UWorld> WorldCopy(World);
 	TArray<uint8> Pixels = MoveTemp(RGBA);
 
-	Async(EAsyncExecution::ThreadPool, [Pixels = MoveTemp(Pixels), Width, Height, DebugDirCopy, SourceCopy]() mutable
+	Async(EAsyncExecution::ThreadPool, [Pixels = MoveTemp(Pixels), Width, Height, DebugDirCopy, SourceCopy, WorldCopy]() mutable
 	{
-		FFromLZSketch2DProcessor::ProcessComposite(Pixels, Width, Height, DebugDirCopy, SourceCopy);
+		FFromLZSketch2DProcessor::ProcessComposite(Pixels, Width, Height, DebugDirCopy, SourceCopy, WorldCopy);
 	});
 }
 
-bool FFromLZSketch2DProcessor::ProcessComposite(const TArray<uint8>& RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source)
+bool FFromLZSketch2DProcessor::ProcessComposite(const TArray<uint8>& RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source, TWeakObjectPtr<UWorld> World)
 {
 	if (Width <= 0 || Height <= 0 || RGBA.Num() < Width * Height * 4)
 	{
@@ -69,6 +71,8 @@ bool FFromLZSketch2DProcessor::ProcessComposite(const TArray<uint8>& RGBA, int32
 		RefJson += FString::Printf(TEXT("  \"capture_stem\": \"%s\",\n"), *Source.CaptureStem);
 		RefJson += FString::Printf(TEXT("  \"capture_png\": \"%s\",\n"), *Source.CapturePngRel);
 		RefJson += FString::Printf(TEXT("  \"capture_json\": \"%s\",\n"), *Source.CaptureJsonRel);
+		RefJson += FString::Printf(TEXT("  \"faces_png\": \"%s\",\n"), *Source.FacesPngRel);
+		RefJson += FString::Printf(TEXT("  \"faces_json\": \"%s\",\n"), *Source.FacesJsonRel);
 		RefJson += FString::Printf(TEXT("  \"sketch_png\": \"%s\"\n"), *Source.SketchPngRel);
 		RefJson += TEXT("}\n");
 		FFileHelper::SaveStringToFile(RefJson, *(PressDir / TEXT("capture_ref.json")));
@@ -213,8 +217,11 @@ bool FFromLZSketch2DProcessor::ProcessComposite(const TArray<uint8>& RGBA, int32
 	const int32 NumCaps = FromLZImageOps::RecoverCapExtrusionsPerComponent(
 		Merged, /*NodeTol*/ 20.0f, /*BlackSelectTol*/ 50.0f, Width, Height, PressDir, ActionPressDir, Caps);
 
+	// ---- Step 10: per-component action -> face-mask overlap -> runtime face rebuild --
+	FFromLZFaceReconstructor::ProcessPress(PressDir, ActionPressDir, World);
+
 	const double Elapsed = FPlatformTime::Seconds() - StartTime;
-	UE_LOG(LogTemp, Log, TEXT("Sketch2D: steps 1-9 done in %.3fs (%dx%d): %d merged strokes; %d cap component(s) -> %s"),
+	UE_LOG(LogTemp, Log, TEXT("Sketch2D: steps 1-10 done in %.3fs (%dx%d): %d merged strokes; %d cap component(s) -> %s"),
 		Elapsed, Width, Height, Merged.Num(), NumCaps, *PressDir);
 
 	return true;

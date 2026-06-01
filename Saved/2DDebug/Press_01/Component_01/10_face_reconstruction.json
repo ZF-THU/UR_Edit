@@ -1,0 +1,52 @@
+{
+	"component": "Component_01",
+	"action": "excavate",
+	"polygon_key": "cap_polygon",
+	"success": false,
+	"error": "No 5% mask-overlap candidate passed the 10 degree normal-to-green-line parallel filter",
+	"actor_name": "FromLZ_ReconstructedFace_Press_01_Component_01",
+	"cap_width": 2031,
+	"cap_height": 1273,
+	"faces_width": 1720,
+	"faces_height": 1222,
+	"cap_mask_pixels": 65200,
+	"min_overlap_pixels": 3260,
+	"green_line_vector_2d": [
+		-0.87314008228068829,
+		0.4874693802844165
+	],
+	"normal_parallel_threshold_degrees": 10,
+	"selected_face_id": -1,
+	"selected_plane_hit_3d": [
+		0,
+		0,
+		0
+	],
+	"candidates": [
+		{
+			"face_id": 1,
+			"overlap_pixels": 65200,
+			"overlap_ratio": 1,
+			"mask_centroid_2d": [
+				1102.1072239263804,
+				513.56654907975462
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				-180.09357371065914,
+				-50.02857839494925,
+				225.69289508741377
+			],
+			"distance_to_camera": 886.92960287764106,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				0.91238446353045699,
+				0.40933432632536471
+			],
+			"normal_green_angle_degrees": 53.337411638744634,
+			"normal_parallel_pass": false
+		}
+	],
+	"mesh_vertices_world": [],
+	"mesh_triangles": []
+}

@@ -25,7 +25,7 @@ bool UFromLZGameViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 		else if (EventArgs.Key == EKeys::SpaceBar)
 		{
 			UE_LOG(LogTemp, Log, TEXT("ProcessSketch invoked from viewport input. Key=%s"), *EventArgs.Key.ToString());
-			FFromLZSketchProcessor::ProcessLatestSketch();
+			FFromLZSketchProcessor::ProcessLatestSketch(GetWorld());
 		}
 	}
 

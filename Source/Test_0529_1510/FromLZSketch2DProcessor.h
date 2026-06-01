@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 
+class UWorld;
+
 // Migrated 2D sketch-analysis pipeline (steps 1-8 of the Python extrusion script),
 // reimplemented in pure C++ with no third-party dependencies.
 //
@@ -33,6 +35,8 @@ struct FSketchSourceInfo
 	FString CaptureStem;     // e.g. "FromLZ_20260531_131543"
 	FString CapturePngRel;   // "FromLZCaptures/FromLZ_...png"
 	FString CaptureJsonRel;  // "FromLZCaptures/FromLZ_...json"
+	FString FacesPngRel;     // "FromLZCaptures/FromLZ_..._faces.png"
+	FString FacesJsonRel;    // "FromLZCaptures/FromLZ_..._faces.json"
 	FString SketchPngRel;    // "FromSketch/....png"
 };
 
@@ -41,8 +45,8 @@ class FFromLZSketch2DProcessor
 public:
 	// Copies the RGBA buffer and runs the pipeline on a background thread so the
 	// game thread never blocks on the (potentially heavy) thinning pass.
-	static void ProcessCompositeAsync(TArray<uint8> RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source);
+	static void ProcessCompositeAsync(TArray<uint8> RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source, UWorld* World);
 
 	// Synchronous entry point (runs on the calling thread). Returns true on success.
-	static bool ProcessComposite(const TArray<uint8>& RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source);
+	static bool ProcessComposite(const TArray<uint8>& RGBA, int32 Width, int32 Height, const FString& DebugDir, const FSketchSourceInfo& Source, TWeakObjectPtr<UWorld> World);
 };

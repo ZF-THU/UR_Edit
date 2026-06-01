@@ -1,0 +1,130 @@
+{
+	"component": "Component_02",
+	"action": "attach",
+	"polygon_key": "cap_polygon_translated",
+	"success": true,
+	"error": "",
+	"actor_name": "FromLZ_ReconstructedFace_Press_01_Component_02",
+	"cap_width": 2031,
+	"cap_height": 1273,
+	"faces_width": 1720,
+	"faces_height": 1222,
+	"cap_mask_pixels": 851,
+	"min_overlap_pixels": 43,
+	"green_line_vector_2d": [
+		0.78237371290149471,
+		-0.62280925921242503
+	],
+	"normal_parallel_threshold_degrees": 10,
+	"selected_face_id": 2,
+	"selected_plane_hit_3d": [
+		230.76970199972141,
+		-140.23946043514206,
+		289.49455834932803
+	],
+	"candidates": [
+		{
+			"face_id": 1,
+			"overlap_pixels": 576,
+			"overlap_ratio": 0.67685076380728559,
+			"mask_centroid_2d": [
+				699.88020833333326,
+				457.86979166666663
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				210.42498467973127,
+				-50.466631951788486,
+				282.16776204307382
+			],
+			"distance_to_camera": 836.157395225404,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				-0.79352338688839019,
+				0.60853975585920272
+			],
+			"normal_green_angle_degrees": 1.0375804035847924,
+			"normal_parallel_pass": true
+		},
+		{
+			"face_id": 2,
+			"overlap_pixels": 45,
+			"overlap_ratio": 0.052878965922444184,
+			"mask_centroid_2d": [
+				662.5,
+				458.5
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				230.76970199972141,
+				-140.23946043514206,
+				289.49455834932803
+			],
+			"distance_to_camera": 749.74386337417138,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				-0.87002765056808506,
+				0.49300292823367509
+			],
+			"normal_green_angle_degrees": 8.9834257724813167,
+			"normal_parallel_pass": true
+		},
+		{
+			"face_id": 3,
+			"overlap_pixels": 230,
+			"overlap_ratio": 0.27027027027027029,
+			"mask_centroid_2d": [
+				671.67391304347825,
+				458.58695652173913
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				229.93349441274262,
+				-95.460366318509955,
+				285.52188392811661
+			],
+			"distance_to_camera": 794.03762464076942,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				0.99999024041616957,
+				-0.0044180394307304317
+			],
+			"normal_green_angle_degrees": 38.268437103265171,
+			"normal_parallel_pass": false
+		}
+	],
+	"mesh_vertices_world": [
+		[
+			329.322,
+			-140.35599999999999,
+			310.00400000000002
+		],
+		[
+			229.99799999999999,
+			-140.25800000000001,
+			309.62700000000001
+		],
+		[
+			230.715,
+			-140.16200000000001,
+			210.74199999999999
+		],
+		[
+			329.54199999999997,
+			-140.25800000000001,
+			210.23699999999999
+		]
+	],
+	"mesh_triangles": [
+		[
+			3,
+			0,
+			1
+		],
+		[
+			1,
+			2,
+			3
+		]
+	]
+}

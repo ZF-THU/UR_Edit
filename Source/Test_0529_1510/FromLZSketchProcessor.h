@@ -2,10 +2,12 @@
 
 #include "CoreMinimal.h"
 
+class UWorld;
+
 class FFromLZSketchProcessor
 {
 public:
-	static void ProcessLatestSketch();
+	static void ProcessLatestSketch(UWorld* World);
 
 private:
 	static FString FindLatestPng(const FString& Directory);
