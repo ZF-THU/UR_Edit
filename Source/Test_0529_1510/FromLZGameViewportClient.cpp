@@ -1,6 +1,7 @@
 #include "FromLZGameViewportClient.h"
 
 #include "FromLZCaptureUtils.h"
+#include "FromLZFaceReconstructor.h"
 #include "FromLZSketchProcessor.h"
 #include "Engine/GameInstance.h"
 #include "InputCoreTypes.h"
@@ -21,6 +22,11 @@ bool UFromLZGameViewportClient::InputKey(const FInputKeyEventArgs& EventArgs)
 		{
 			UE_LOG(LogTemp, Log, TEXT("CaptureFromLZ invoked from viewport input. Key=%s"), *EventArgs.Key.ToString());
 			FFromLZCaptureUtils::CaptureFromWorld(GetWorld());
+		}
+		else if (EventArgs.Key == EKeys::LeftShift || EventArgs.Key == EKeys::RightShift)
+		{
+			UE_LOG(LogTemp, Log, TEXT("Step11 restore invoked from viewport input. Key=%s"), *EventArgs.Key.ToString());
+			FFromLZFaceReconstructor::RestoreStep11RuntimeBooleans(GetWorld());
 		}
 		else if (EventArgs.Key == EKeys::SpaceBar)
 		{

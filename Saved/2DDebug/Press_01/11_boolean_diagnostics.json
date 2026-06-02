@@ -1,0 +1,65 @@
+{
+	"diagnostic_version": 2,
+	"press_id": "Press_01",
+	"active_undo_press_id": "Press_01",
+	"excavation_cutter_normal_scale": 1.2,
+	"snap_tolerance_cm": 0.050000000000000003,
+	"min_renderable_edge_cm": 0.050000000000000003,
+	"input_reconstruction_meshes": [
+		{
+			"actor_name": "FromLZ_ReconstructedSolid_Press_01_Component_02",
+			"tag": "FromLZ_ReconstructedSolid",
+			"is_excavate_cutter": false,
+			"input_world_vertex_count": 32,
+			"input_triangle_index_count": 180,
+			"input_triangle_count": 60,
+			"normal": [
+				-0.00097999905880935588,
+				-0.99999903960138359,
+				-0.00097999905880935588
+			],
+			"input_bounds":
+			{
+				"valid": true,
+				"min": [
+					70.667449540944659,
+					-369.91654713499429,
+					148.36257840086051
+				],
+				"max": [
+					265.28647358286963,
+					-50.218135456515483,
+					389.03236901760033
+				],
+				"center": [
+					167.97696156190716,
+					-210.06734129575489,
+					268.69747370923039
+				],
+				"extent": [
+					97.309512020962487,
+					159.8492058392394,
+					120.33489530836991
+				],
+				"size": [
+					194.61902404192497,
+					319.69841167847881,
+					240.66979061673982
+				],
+				"diagonal": 444.97818717806706
+			}
+		}
+	],
+	"cutters": [],
+	"build_failures": [],
+	"summary":
+	{
+		"excavate_cutter_count": 0,
+		"updated_static_component_count": 0,
+		"updated_procedural_component_count": 0,
+		"created_boolean_result_actor_count": 0,
+		"failed_boolean_count": 0,
+		"status": "no_excavate_cutters"
+	},
+	"targets": []
+}

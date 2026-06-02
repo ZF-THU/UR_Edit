@@ -1,0 +1,133 @@
+{
+	"component": "Component_02",
+	"action": "attach",
+	"polygon_key": "cap_polygon_translated",
+	"success": true,
+	"error": "",
+	"actor_name": "FromLZ_ReconstructedFace_Press_02_Component_02",
+	"cap_width": 1720,
+	"cap_height": 1222,
+	"faces_width": 1720,
+	"faces_height": 1222,
+	"cap_mask_pixels": 42299,
+	"min_overlap_pixels": 2115,
+	"green_line_vector_2d": [
+		0.82404192419936761,
+		-0.56652882288706519
+	],
+	"green_line_vectors_2d": [
+		[
+			0.82404192419936761,
+			-0.56652882288706519
+		],
+		[
+			1,
+			0
+		],
+		[
+			0.88813023448368777,
+			-0.45959186959295728
+		],
+		[
+			0.44721359549995793,
+			-0.89442719099991586
+		],
+		[
+			0.76774791069847448,
+			-0.64075201569571927
+		],
+		[
+			0,
+			-1
+		]
+	],
+	"normal_parallel_threshold_degrees": 10,
+	"selected_face_id": 6,
+	"selected_plane_hit_3d": [
+		229.92712196359938,
+		-92.417112436011053,
+		261.20029243663924
+	],
+	"candidates": [
+		{
+			"face_id": 1,
+			"overlap_pixels": 37029,
+			"overlap_ratio": 0.87541076621196723,
+			"mask_centroid_2d": [
+				617.64891031353807,
+				546.68693456480059
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				165.50374496480453,
+				-50.442369293077832,
+				313.12259491058961
+			],
+			"distance_to_camera": 891.6463165062338,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				0.62719163037410752,
+				-0.77886498110305935
+			],
+			"normal_green_angle_degrees": 11.308852998450512,
+			"normal_parallel_pass": false
+		},
+		{
+			"face_id": 6,
+			"overlap_pixels": 3175,
+			"overlap_ratio": 0.075060876143644054,
+			"mask_centroid_2d": [
+				534.05779527559048,
+				608.05181102362201
+			],
+			"has_plane_hit": true,
+			"plane_hit_3d": [
+				229.92712196359938,
+				-92.417112436011053,
+				261.20029243663924
+			],
+			"distance_to_camera": 916.24637284116022,
+			"has_projected_normal": true,
+			"projected_normal_2d": [
+				0.98872411191941367,
+				0.14974855761965392
+			],
+			"normal_green_angle_degrees": 8.6123553910241561,
+			"normal_parallel_pass": true
+		}
+	],
+	"mesh_vertices_world": [
+		[
+			230.02099999999999,
+			-138.43199999999999,
+			210.72499999999999
+		],
+		[
+			229.92500000000001,
+			-138.709,
+			309.80500000000001
+		],
+		[
+			229.84100000000001,
+			-52.121000000000002,
+			309.40600000000001
+		],
+		[
+			229.93700000000001,
+			-51.844000000000001,
+			210.32499999999999
+		]
+	],
+	"mesh_triangles": [
+		[
+			3,
+			0,
+			1
+		],
+		[
+			1,
+			2,
+			3
+		]
+	]
+}

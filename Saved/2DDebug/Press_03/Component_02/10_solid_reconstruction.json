@@ -1,0 +1,451 @@
+{
+	"component": "Component_02",
+	"action": "attach",
+	"source_polygon_key": "cap_polygon_translated",
+	"copied_polygon_key": "cap_polygon",
+	"success": false,
+	"error": "not enough vertices match copied cap after orthographic extrusion solve: 0 valid, need 3",
+	"warning": "",
+	"actor_name": "FromLZ_ReconstructedSolid_Press_03_Component_02",
+	"cap_width": 1720,
+	"cap_height": 1222,
+	"faces_width": 1720,
+	"faces_height": 1222,
+	"selected_source_face_id": 5,
+	"source_plane_point": [
+		279.99099999999999,
+		-95.212999999999994,
+		310.084
+	],
+	"source_plane_normal": [
+		-0.00097999905880935588,
+		-0.00097999905880935588,
+		0.99999903960138359
+	],
+	"oriented_normal_source_to_copied": [
+		0.00097999905880935588,
+		0.00097999905880935588,
+		-0.99999903960138359
+	],
+	"source_to_copied_vector_2d": [
+		-144,
+		99
+	],
+	"projected_oriented_normal_2d": [
+		-0.00083952598540810704,
+		0.99999964759799786
+	],
+	"extrusion_depth": 94.209766168534145,
+	"max_depth_sample_reprojection_error_pixels": 131.06129291289631,
+	"mean_copied_reprojection_error_pixels": 0,
+	"max_copied_reprojection_error_pixels": 0,
+	"depth_samples": [
+		{
+			"index": 0,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				701,
+				544
+			],
+			"copied_pixel_2d": [
+				557,
+				643
+			],
+			"source_world": [
+				138.87096216318133,
+				-130.90939892916549,
+				309.91071989196934
+			],
+			"point_on_extrusion": [
+				138.96328764535716,
+				-130.81707344698967,
+				215.70104420236427
+			],
+			"point_on_copied_ray": [
+				138.96328764535716,
+				-130.81707344698967,
+				215.70104420236427
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155619
+		},
+		{
+			"index": 1,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				700,
+				658
+			],
+			"copied_pixel_2d": [
+				556,
+				757
+			],
+			"source_world": [
+				86.530644505547372,
+				-423.64841758416338,
+				309.57254214238299
+			],
+			"point_on_extrusion": [
+				86.622969987723181,
+				-423.55609210198759,
+				215.36286645277792
+			],
+			"point_on_copied_ray": [
+				86.622969987723181,
+				-423.55609210198759,
+				215.36286645277792
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155619
+		},
+		{
+			"index": 2,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				621,
+				664
+			],
+			"copied_pixel_2d": [
+				477,
+				763
+			],
+			"source_world": [
+				153.11225248862823,
+				-451.82292513442167,
+				309.61018110080715
+			],
+			"point_on_extrusion": [
+				153.20457797080405,
+				-451.73059965224587,
+				215.40050541120209
+			],
+			"point_on_copied_ray": [
+				153.20457797080405,
+				-451.73059965224587,
+				215.40050541120209
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155619
+		},
+		{
+			"index": 3,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				507,
+				662
+			],
+			"copied_pixel_2d": [
+				363,
+				761
+			],
+			"source_world": [
+				254.16761782549651,
+				-465.12581351561624,
+				309.6961785282237
+			],
+			"point_on_extrusion": [
+				254.25994330767233,
+				-465.03348803344045,
+				215.48650283861863
+			],
+			"point_on_copied_ray": [
+				254.25994330767233,
+				-465.03348803344045,
+				215.48650283861863
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155591
+		},
+		{
+			"index": 4,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				506,
+				592
+			],
+			"copied_pixel_2d": [
+				362,
+				691
+			],
+			"source_world": [
+				287.72395276122404,
+				-285.63480263952499,
+				309.90496492711929
+			],
+			"point_on_extrusion": [
+				287.81627824339984,
+				-285.5424771573492,
+				215.69528923751423
+			],
+			"point_on_copied_ray": [
+				287.81627824339984,
+				-285.5424771573492,
+				215.69528923751423
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155619
+		},
+		{
+			"index": 5,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				508,
+				558
+			],
+			"copied_pixel_2d": [
+				364,
+				657
+			],
+			"source_world": [
+				301.83963914653469,
+				-198.05147037861207,
+				310.00462996539255
+			],
+			"point_on_extrusion": [
+				301.93196462871049,
+				-197.95914489643624,
+				215.79495427578749
+			],
+			"point_on_copied_ray": [
+				301.93196462871049,
+				-197.95914489643624,
+				215.79495427578749
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155625
+		},
+		{
+			"index": 6,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				504,
+				466
+			],
+			"copied_pixel_2d": [
+				360,
+				565
+			],
+			"source_world": [
+				348.30100776144536,
+				37.416673387466403,
+				310.28092088752595
+			],
+			"point_on_extrusion": [
+				348.39333324362116,
+				37.50899886964222,
+				216.07124519792089
+			],
+			"point_on_copied_ray": [
+				348.39333324362116,
+				37.50899886964222,
+				216.07124519792089
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155614
+		},
+		{
+			"index": 7,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				624,
+				440
+			],
+			"copied_pixel_2d": [
+				480,
+				539
+			],
+			"source_world": [
+				255.04730868970057,
+				123.55095971824369,
+				310.27394386303973
+			],
+			"point_on_extrusion": [
+				255.13963417187639,
+				123.6432852004195,
+				216.06426817343467
+			],
+			"point_on_copied_ray": [
+				255.13963417187639,
+				123.6432852004195,
+				216.06426817343467
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155631
+		},
+		{
+			"index": 8,
+			"valid": false,
+			"error": "vertex reprojection error is too large",
+			"source_pixel_2d": [
+				710.39999999999998,
+				437.19999999999999
+			],
+			"copied_pixel_2d": [
+				566.39999999999998,
+				536.20000000000005
+			],
+			"source_world": [
+				180.47271759018386,
+				144.70948245175657,
+				310.2215961160411
+			],
+			"point_on_extrusion": [
+				180.56504307235969,
+				144.80180793393239,
+				216.01192042643603
+			],
+			"point_on_copied_ray": [
+				180.56504307235969,
+				144.80180793393239,
+				216.01192042643603
+			],
+			"depth": 94.209766168534145,
+			"closest_world_distance": 0,
+			"reprojection_error_pixels": 143.91683618155631
+		}
+	],
+	"source_loop_2d": [
+		[
+			701,
+			544
+		],
+		[
+			700,
+			658
+		],
+		[
+			621,
+			664
+		],
+		[
+			507,
+			662
+		],
+		[
+			506,
+			592
+		],
+		[
+			508,
+			558
+		],
+		[
+			504,
+			466
+		],
+		[
+			624,
+			440
+		],
+		[
+			710.39999999999998,
+			437.19999999999999
+		]
+	],
+	"copied_target_loop_2d": [
+		[
+			557,
+			643
+		],
+		[
+			556,
+			757
+		],
+		[
+			477,
+			763
+		],
+		[
+			363,
+			761
+		],
+		[
+			362,
+			691
+		],
+		[
+			364,
+			657
+		],
+		[
+			360,
+			565
+		],
+		[
+			480,
+			539
+		],
+		[
+			566.39999999999998,
+			536.20000000000005
+		]
+	],
+	"reprojected_source_loop_2d": [],
+	"reprojected_copied_loop_2d": [],
+	"source_loop_world": [
+		[
+			138.87096216318133,
+			-130.90939892916549,
+			309.91071989196934
+		],
+		[
+			86.530644505547372,
+			-423.64841758416338,
+			309.57254214238299
+		],
+		[
+			153.11225248862823,
+			-451.82292513442167,
+			309.61018110080715
+		],
+		[
+			254.16761782549651,
+			-465.12581351561624,
+			309.6961785282237
+		],
+		[
+			287.72395276122404,
+			-285.63480263952499,
+			309.90496492711929
+		],
+		[
+			301.83963914653469,
+			-198.05147037861207,
+			310.00462996539255
+		],
+		[
+			348.30100776144536,
+			37.416673387466403,
+			310.28092088752595
+		],
+		[
+			255.04730868970057,
+			123.55095971824369,
+			310.27394386303973
+		],
+		[
+			180.47271759018386,
+			144.70948245175657,
+			310.2215961160411
+		]
+	],
+	"copied_loop_world": [],
+	"mesh_vertices_world": [],
+	"mesh_triangles": []
+}

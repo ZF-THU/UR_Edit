@@ -1,0 +1,30 @@
+{
+  "nodes": [
+    {"id": 0, "pos": [488.00, 537.00]},
+    {"id": 1, "pos": [552.00, 537.50]},
+    {"id": 2, "pos": [416.38, 553.25]},
+    {"id": 3, "pos": [555.00, 638.00]},
+    {"id": 4, "pos": [362.00, 564.00]},
+    {"id": 5, "pos": [363.00, 761.00]},
+    {"id": 6, "pos": [556.67, 746.67]}
+  ],
+  "edges": [
+    {"stroke_id": 86, "u": 0, "v": 1, "color": "red", "kept": true},
+    {"stroke_id": 87, "u": 0, "v": 0, "color": "red", "kept": true},
+    {"stroke_id": 88, "u": 0, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 93, "u": 1, "v": 1, "color": "red", "kept": true},
+    {"stroke_id": 94, "u": 1, "v": 3, "color": "red", "kept": true},
+    {"stroke_id": 95, "u": 1, "v": 1, "color": "red", "kept": true},
+    {"stroke_id": 100, "u": 2, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 101, "u": 2, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 102, "u": 2, "v": 4, "color": "red", "kept": true},
+    {"stroke_id": 103, "u": 2, "v": 2, "color": "red", "kept": true},
+    {"stroke_id": 104, "u": 4, "v": 4, "color": "red", "kept": true},
+    {"stroke_id": 105, "u": 4, "v": 5, "color": "red", "kept": true},
+    {"stroke_id": 106, "u": 5, "v": 6, "color": "red", "kept": true},
+    {"stroke_id": 107, "u": 6, "v": 6, "color": "red", "kept": true},
+    {"stroke_id": 114, "u": 3, "v": 3, "color": "red", "kept": true},
+    {"stroke_id": 117, "u": 3, "v": 6, "color": "red", "kept": true},
+    {"stroke_id": 118, "u": 6, "v": 6, "color": "red", "kept": true}
+  ]
+}

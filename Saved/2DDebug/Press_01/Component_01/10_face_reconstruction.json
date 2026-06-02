@@ -2,27 +2,35 @@
 	"component": "Component_01",
 	"action": "excavate",
 	"polygon_key": "cap_polygon",
-	"success": true,
-	"error": "",
+	"success": false,
+	"error": "No 5% mask-overlap candidate passed the 10 degree normal-to-green-line parallel filter",
 	"actor_name": "FromLZ_ReconstructedFace_Press_01_Component_01",
 	"cap_width": 1720,
 	"cap_height": 1222,
 	"faces_width": 1720,
 	"faces_height": 1222,
-	"cap_mask_pixels": 80185,
-	"min_overlap_pixels": 4010,
+	"cap_mask_pixels": 80228,
+	"min_overlap_pixels": 4012,
 	"green_line_vector_2d": [
 		-0.89708903366019022,
 		0.44184982254904892
 	],
 	"green_line_vectors_2d": [
 		[
-			0.94868329805051377,
-			-0.31622776601683794
+			0.9908301680442988,
+			-0.13511320473331348
 		],
 		[
-			0,
-			-1
+			0.55470019622522915,
+			-0.83205029433784372
+		],
+		[
+			0.95072983948147882,
+			-0.31002059983091701
+		],
+		[
+			-0.94868329805051377,
+			-0.31622776601683794
 		],
 		[
 			-0.97251149691521388,
@@ -42,115 +50,60 @@
 		]
 	],
 	"normal_parallel_threshold_degrees": 10,
-	"selected_face_id": 1,
+	"selected_face_id": -1,
 	"selected_plane_hit_3d": [
-		-271.02311588921594,
-		-50.128123534894598,
-		407.99713108765803
+		0,
+		0,
+		0
 	],
 	"candidates": [
 		{
-			"face_id": 0,
-			"overlap_pixels": 11077,
-			"overlap_ratio": 0.13814304421026377,
-			"mask_centroid_2d": [
-				1205.0161144714273,
-				383.82246998284734
-			],
-			"has_plane_hit": true,
-			"plane_hit_3d": [
-				-42.609124144038049,
-				2005.6640237483934,
-				0.69544384161235939
-			],
-			"distance_to_camera": 2975.4231109528191,
-			"has_projected_normal": true,
-			"projected_normal_2d": [
-				0.00086099085517657306,
-				-0.99999962934730513
-			],
-			"normal_green_angle_degrees": 0.049331148284529315,
-			"normal_parallel_pass": true
-		},
-		{
 			"face_id": 1,
-			"overlap_pixels": 61539,
-			"overlap_ratio": 0.76746274240818113,
+			"overlap_pixels": 74254,
+			"overlap_ratio": 0.92553721892606078,
 			"mask_centroid_2d": [
-				1132.3458213490633,
-				542.45835161442335
+				1141.122094432623,
+				521.33226492848871
 			],
 			"has_plane_hit": true,
 			"plane_hit_3d": [
-				-271.02311588921594,
-				-50.128123534894598,
-				407.99713108765803
+				-341.50920407061722,
+				-49.988792033059894,
+				362.9596459685024
 			],
-			"distance_to_camera": 886.37064529834436,
+			"distance_to_camera": 629.1435096831342,
 			"has_projected_normal": true,
 			"projected_normal_2d": [
-				-0.47963482687545644,
-				0.87746819477867755
+				0.7208199611810554,
+				-0.69312234386357929
 			],
-			"normal_green_angle_degrees": 4.6990657253178592,
-			"normal_parallel_pass": true
+			"normal_green_angle_degrees": 12.432151980657347,
+			"normal_parallel_pass": false
 		},
 		{
 			"face_id": 2,
-			"overlap_pixels": 7569,
-			"overlap_ratio": 0.094394213381555153,
+			"overlap_pixels": 5801,
+			"overlap_ratio": 0.072306426683950736,
 			"mask_centroid_2d": [
-				1172.6199630070023,
-				430.86305984938565
+				1208.4596621272194,
+				368.2636614376832
 			],
 			"has_plane_hit": true,
 			"plane_hit_3d": [
-				-300.59782343845336,
-				-2.8758852951377776,
-				499.75790838544111
+				-389.16313906671917,
+				-5.6014534232934352,
+				499.69541097935979
 			],
-			"distance_to_camera": 925.4088863831854,
+			"distance_to_camera": 664.79757808926979,
 			"has_projected_normal": true,
 			"projected_normal_2d": [
-				0.00086099085517657306,
-				-0.99999962934730513
+				-0.00061771122545078517,
+				0.99999980921640286
 			],
-			"normal_green_angle_degrees": 0.049331148284529315,
-			"normal_parallel_pass": true
+			"normal_green_angle_degrees": 23.92709672615122,
+			"normal_parallel_pass": false
 		}
 	],
-	"mesh_vertices_world": [
-		[
-			499.56799999999998,
-			-50.970999999999997,
-			499.60399999999998
-		],
-		[
-			-499.827,
-			-49.994,
-			499.34699999999998
-		],
-		[
-			-499.75700000000001,
-			-49.506,
-			-0.029000000000000001
-		],
-		[
-			499.63799999999998,
-			-50.482999999999997,
-			0.22800000000000001
-		]
-	],
-	"mesh_triangles": [
-		[
-			3,
-			0,
-			1
-		],
-		[
-			1,
-			2,
-			3
-		]
-	]
+	"mesh_vertices_world": [],
+	"mesh_triangles": []
 }

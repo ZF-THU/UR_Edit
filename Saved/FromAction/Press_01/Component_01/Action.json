@@ -1,7 +1,7 @@
 {
   "action": "excavate",
   "has_interior_green": true,
-  "interior_green_stroke_id": 83,
+  "interior_green_stroke_id": 90,
   "interior_green_inside_length": 260.752,
   "interior_green_min_inside_length": 50.000
 }

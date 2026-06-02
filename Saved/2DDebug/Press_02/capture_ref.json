@@ -1,0 +1,11 @@
+{
+  "press": "Press_02",
+  "processed_at": "20260602_170823",
+  "has_capture": true,
+  "capture_stem": "FromLZ_20260602_170822",
+  "capture_png": "FromLZCaptures/FromLZ_20260602_170822.png",
+  "capture_json": "FromLZCaptures/FromLZ_20260602_170822.json",
+  "faces_png": "FromLZCaptures/FromLZ_20260602_170822_faces.png",
+  "faces_json": "FromLZCaptures/FromLZ_20260602_170822_faces.json",
+  "sketch_png": "FromSketch/Sketch_01.png"
+}

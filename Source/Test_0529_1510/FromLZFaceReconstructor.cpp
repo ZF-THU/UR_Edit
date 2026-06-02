@@ -5,7 +5,9 @@
 #include "Async/ParallelFor.h"
 #include "Dom/JsonObject.h"
 #include "Dom/JsonValue.h"
+#include "Components/PrimitiveComponent.h"
 #include "Components/StaticMeshComponent.h"
+#include "DynamicMesh/DynamicMesh3.h"
 #include "Engine/Engine.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -16,9 +18,11 @@
 #include "IImageWrapperModule.h"
 #include "Materials/Material.h"
 #include "Materials/MaterialInterface.h"
+#include "Materials/MaterialInstanceDynamic.h"
 #include "Misc/FileHelper.h"
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
+#include "Operations/MeshBoolean.h"
 #include "ProceduralMeshComponent.h"
 #include "Serialization/JsonReader.h"
 #include "Serialization/JsonSerializer.h"
@@ -28,6 +32,10 @@ namespace
 {
 	const FName ReconstructedFaceTag(TEXT("FromLZ_ReconstructedFace"));
 	const FName ReconstructedSolidTag(TEXT("FromLZ_ReconstructedSolid"));
+	const FName Step11BooleanResultTag(TEXT("FromLZ_Step11BooleanResult"));
+	const FName Step11HiddenSourceTag(TEXT("FromLZ_Step11HiddenSource"));
+	const FName Step11ActionAttachTag(TEXT("FromLZ_Action_Attach"));
+	const FName Step11ActionExcavateCutterTag(TEXT("FromLZ_Action_ExcavateCutter"));
 	constexpr double MinOverlapRatio = 0.05;
 	constexpr double NormalParallelThresholdDegrees = 10.0;
 	constexpr double MinProjectedNormalPixels = 1.0;
@@ -35,7 +43,12 @@ namespace
 	constexpr double SolidRdpTolerancePixels = 1.25;
 	constexpr int32 SolidTargetMaxLoopPoints = 384;
 	constexpr int32 MinSolidDepthSamples = 3;
+	constexpr double ExcavationCutterNormalScale = 1.2;
+	constexpr double Step11BooleanSnapToleranceCm = 0.05;
+	constexpr double Step11BooleanMinRenderableEdgeCm = 0.05;
+	constexpr double Step11BooleanBoundsExpandCm = 1.0;
 	const FColor ReconstructedDebugBlue(0, 120, 255, 255);
+	static FString GActiveUndoPressId;
 
 	struct FFaceInfo
 	{
@@ -88,6 +101,8 @@ namespace
 		TArray<int32> Triangles;
 		FVector Normal = FVector::UpVector;
 		FColor Color = ReconstructedDebugBlue;
+		bool bIsExcavateCutter = false;
+		FString PressId;
 	};
 
 	struct FSolidDepthSample
@@ -185,6 +200,34 @@ namespace
 		TArray<uint8> FacesRGBA;
 		int32 FacesWidth = 0;
 		int32 FacesHeight = 0;
+	};
+
+	struct FStep11MeshDiagnostics
+	{
+		FString Label;
+		FString SourceType;
+		int32 VertexCount = 0;
+		int32 TriangleCount = 0;
+		int32 EdgeCount = 0;
+		int32 BoundaryEdgeCount = 0;
+		int32 NonManifoldEdgeCount = 0;
+		int32 InconsistentOrientationEdgeCount = 0;
+		int32 InvalidTriangleCount = 0;
+		int32 DegenerateTriangleCount = 0;
+		int32 TinyTriangleCount = 0;
+		int32 DuplicateTriangleCount = 0;
+		double SurfaceArea = 0.0;
+		double MinTriangleArea = 0.0;
+		double MaxTriangleArea = 0.0;
+		double SignedVolume = 0.0;
+		double AbsVolume = 0.0;
+		double SignedVolumeBeforeOrientationFix = 0.0;
+		double SignedVolumeAfterOrientationFix = 0.0;
+		double MinEdgeLength = 0.0;
+		double MaxEdgeLength = 0.0;
+		double MeanEdgeLength = 0.0;
+		FBox Bounds = FBox(ForceInit);
+		bool bOrientationReversedForBoolean = false;
 	};
 
 	static uint32 ColorKey(uint8 R, uint8 G, uint8 B)
@@ -1392,6 +1435,23 @@ namespace
 		return Points.Num() > 0 ? Sum / double(Points.Num()) : FVector::ZeroVector;
 	}
 
+	static void ScaleVerticesAlongAxis(TArray<FVector>& Vertices, const FVector& Axis, double Scale)
+	{
+		const FVector UnitAxis = Axis.GetSafeNormal();
+		if (Vertices.Num() == 0 || UnitAxis.IsNearlyZero() || !FMath::IsFinite(Scale) || FMath::IsNearlyEqual(Scale, 1.0))
+		{
+			return;
+		}
+
+		const FVector Anchor = AverageVector(Vertices);
+		const double DeltaScale = Scale - 1.0;
+		for (FVector& Vertex : Vertices)
+		{
+			const double AxisDistance = FVector::DotProduct(Vertex - Anchor, UnitAxis);
+			Vertex += UnitAxis * (AxisDistance * DeltaScale);
+		}
+	}
+
 	static FVector2D AverageVector2DDelta(const TArray<FVector2D>& Source, const TArray<FVector2D>& Copied)
 	{
 		FVector2D Sum = FVector2D::ZeroVector;
@@ -2441,6 +2501,32 @@ namespace
 		return Name.IsEmpty() ? TEXT("Mesh") : Name;
 	}
 
+	static FName Step11PressTag(const FString& PressId)
+	{
+		return FName(*FString::Printf(TEXT("FromLZ_Press_%s"), *PressId));
+	}
+
+	static bool ActorHasAnyStep11RuntimeTag(const AActor* Actor)
+	{
+		return Actor && (
+			Actor->ActorHasTag(Step11BooleanResultTag) ||
+			Actor->ActorHasTag(Step11ActionAttachTag) ||
+			Actor->ActorHasTag(Step11ActionExcavateCutterTag));
+	}
+
+	static bool ActorIsStep11Cutter(const AActor* Actor)
+	{
+		return Actor && Actor->ActorHasTag(Step11ActionExcavateCutterTag);
+	}
+
+	static void MergeStep11StringSet(TSet<FString>& Dest, const TSet<FString>& Source)
+	{
+		for (const FString& Value : Source)
+		{
+			Dest.Add(Value);
+		}
+	}
+
 	static void AppendDoubleSidedTriangles(const TArray<int32>& Triangles, TArray<int32>& OutTriangles)
 	{
 		OutTriangles.Reset();
@@ -2488,6 +2574,1782 @@ namespace
 		}
 
 		return UMaterial::GetDefaultMaterial(MD_Surface);
+	}
+
+	static UMaterialInterface* GetReconstructionCutterBaseMaterial()
+	{
+		static TWeakObjectPtr<UMaterialInterface> CachedMaterial;
+		if (UMaterialInterface* Cached = CachedMaterial.Get())
+		{
+			return Cached;
+		}
+
+		const TCHAR* MaterialPaths[] =
+		{
+			TEXT("/Engine/EngineDebugMaterials/M_SimpleUnlitTranslucent.M_SimpleUnlitTranslucent"),
+			TEXT("/Engine/EngineDebugMaterials/M_SimpleTranslucent.M_SimpleTranslucent"),
+			TEXT("/Engine/EngineMaterials/Widget3DPassThrough_Translucent.Widget3DPassThrough_Translucent")
+		};
+		for (const TCHAR* Path : MaterialPaths)
+		{
+			if (UMaterialInterface* Material = LoadObject<UMaterialInterface>(nullptr, Path))
+			{
+				CachedMaterial = Material;
+				return Material;
+			}
+		}
+
+		return GetReconstructionVertexColorMaterial();
+	}
+
+	static UMaterialInterface* CreateCutterMaterial(UObject* Outer)
+	{
+		UMaterialInterface* BaseMaterial = GetReconstructionCutterBaseMaterial();
+		UMaterialInstanceDynamic* DynamicMaterial = UMaterialInstanceDynamic::Create(BaseMaterial, Outer);
+		if (!DynamicMaterial)
+		{
+			return BaseMaterial;
+		}
+
+		const FLinearColor CutterColor(0.0f, 0.47f, 1.0f, 0.25f);
+		const FName ColorParameterNames[] =
+		{
+			TEXT("Color"),
+			TEXT("BaseColor"),
+			TEXT("Tint"),
+			TEXT("TintColor"),
+			TEXT("EmissiveColor")
+		};
+		for (const FName& ParameterName : ColorParameterNames)
+		{
+			DynamicMaterial->SetVectorParameterValue(ParameterName, CutterColor);
+		}
+
+		const FName OpacityParameterNames[] =
+		{
+			TEXT("Opacity"),
+			TEXT("Alpha"),
+			TEXT("Transparency")
+		};
+		for (const FName& ParameterName : OpacityParameterNames)
+		{
+			DynamicMaterial->SetScalarParameterValue(ParameterName, CutterColor.A);
+		}
+		return DynamicMaterial;
+	}
+
+	static FBox BuildWorldBounds(const TArray<FVector>& Vertices)
+	{
+		FBox Box(ForceInit);
+		for (const FVector& V : Vertices)
+		{
+			Box += V;
+		}
+		return Box;
+	}
+
+	static FBox BuildDynamicMeshBounds(const UE::Geometry::FDynamicMesh3& Mesh)
+	{
+		FBox Box(ForceInit);
+		for (int32 VertexId : Mesh.VertexIndicesItr())
+		{
+			const FVector3d V = Mesh.GetVertex(VertexId);
+			Box += FVector(V.X, V.Y, V.Z);
+		}
+		return Box;
+	}
+
+	static FString Step11EdgeKey(int32 A, int32 B)
+	{
+		if (A > B)
+		{
+			Swap(A, B);
+		}
+		return FString::Printf(TEXT("%d_%d"), A, B);
+	}
+
+	static FString Step11DirectedEdgeKey(int32 A, int32 B)
+	{
+		return FString::Printf(TEXT("%d_%d"), A, B);
+	}
+
+	static FString Step11TriangleKey(int32 A, int32 B, int32 C)
+	{
+		TArray<int32> Indices;
+		Indices.Add(A);
+		Indices.Add(B);
+		Indices.Add(C);
+		Indices.Sort();
+		return FString::Printf(TEXT("%d_%d_%d"), Indices[0], Indices[1], Indices[2]);
+	}
+
+	static void AddStep11EdgeDiagnostics(
+		int32 A,
+		int32 B,
+		double EdgeLength,
+		TMap<FString, int32>& UndirectedEdgeCounts,
+		TMap<FString, int32>& DirectedEdgeCounts,
+		TMap<FString, double>& EdgeLengthByKey)
+	{
+		const FString UndirectedKey = Step11EdgeKey(A, B);
+		UndirectedEdgeCounts.FindOrAdd(UndirectedKey) += 1;
+		DirectedEdgeCounts.FindOrAdd(Step11DirectedEdgeKey(A, B)) += 1;
+		if (!EdgeLengthByKey.Contains(UndirectedKey))
+		{
+			EdgeLengthByKey.Add(UndirectedKey, EdgeLength);
+		}
+	}
+
+	static FStep11MeshDiagnostics AnalyzeStep11DynamicMesh(
+		const UE::Geometry::FDynamicMesh3& Mesh,
+		const FString& Label,
+		const FString& SourceType)
+	{
+		constexpr double DegenerateAreaTolerance = 1e-8;
+		constexpr double TinyAreaTolerance = 1e-4;
+
+		FStep11MeshDiagnostics Diagnostics;
+		Diagnostics.Label = Label;
+		Diagnostics.SourceType = SourceType;
+		Diagnostics.VertexCount = Mesh.VertexCount();
+		Diagnostics.TriangleCount = Mesh.TriangleCount();
+		Diagnostics.Bounds = BuildDynamicMeshBounds(Mesh);
+
+		TMap<FString, int32> UndirectedEdgeCounts;
+		TMap<FString, int32> DirectedEdgeCounts;
+		TMap<FString, double> EdgeLengthByKey;
+		TSet<FString> TriangleKeys;
+
+		double MinTriangleArea = TNumericLimits<double>::Max();
+		double MaxTriangleArea = 0.0;
+		for (int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			const UE::Geometry::FIndex3i Tri = Mesh.GetTriangle(TriangleId);
+			if (Tri.A == Tri.B || Tri.B == Tri.C || Tri.C == Tri.A)
+			{
+				++Diagnostics.InvalidTriangleCount;
+				continue;
+			}
+
+			const FString TriKey = Step11TriangleKey(Tri.A, Tri.B, Tri.C);
+			if (TriangleKeys.Contains(TriKey))
+			{
+				++Diagnostics.DuplicateTriangleCount;
+			}
+			else
+			{
+				TriangleKeys.Add(TriKey);
+			}
+
+			const FVector3d A3 = Mesh.GetVertex(Tri.A);
+			const FVector3d B3 = Mesh.GetVertex(Tri.B);
+			const FVector3d C3 = Mesh.GetVertex(Tri.C);
+			const FVector A(A3.X, A3.Y, A3.Z);
+			const FVector B(B3.X, B3.Y, B3.Z);
+			const FVector C(C3.X, C3.Y, C3.Z);
+			const double Area = 0.5 * FVector::CrossProduct(B - A, C - A).Size();
+			Diagnostics.SurfaceArea += Area;
+			MinTriangleArea = FMath::Min(MinTriangleArea, Area);
+			MaxTriangleArea = FMath::Max(MaxTriangleArea, Area);
+			if (Area <= DegenerateAreaTolerance)
+			{
+				++Diagnostics.DegenerateTriangleCount;
+			}
+			else if (Area <= TinyAreaTolerance)
+			{
+				++Diagnostics.TinyTriangleCount;
+			}
+
+			Diagnostics.SignedVolume += FVector::DotProduct(A, FVector::CrossProduct(B, C)) / 6.0;
+
+			AddStep11EdgeDiagnostics(Tri.A, Tri.B, FVector::Distance(A, B), UndirectedEdgeCounts, DirectedEdgeCounts, EdgeLengthByKey);
+			AddStep11EdgeDiagnostics(Tri.B, Tri.C, FVector::Distance(B, C), UndirectedEdgeCounts, DirectedEdgeCounts, EdgeLengthByKey);
+			AddStep11EdgeDiagnostics(Tri.C, Tri.A, FVector::Distance(C, A), UndirectedEdgeCounts, DirectedEdgeCounts, EdgeLengthByKey);
+		}
+
+		Diagnostics.EdgeCount = UndirectedEdgeCounts.Num();
+		for (const TPair<FString, int32>& Pair : UndirectedEdgeCounts)
+		{
+			if (Pair.Value == 1)
+			{
+				++Diagnostics.BoundaryEdgeCount;
+			}
+			else if (Pair.Value > 2)
+			{
+				++Diagnostics.NonManifoldEdgeCount;
+			}
+
+			TArray<FString> Parts;
+			Pair.Key.ParseIntoArray(Parts, TEXT("_"), true);
+			if (Parts.Num() == 2)
+			{
+				const int32 A = FCString::Atoi(*Parts[0]);
+				const int32 B = FCString::Atoi(*Parts[1]);
+				const int32 AB = DirectedEdgeCounts.FindRef(Step11DirectedEdgeKey(A, B));
+				const int32 BA = DirectedEdgeCounts.FindRef(Step11DirectedEdgeKey(B, A));
+				if (Pair.Value == 2 && !(AB == 1 && BA == 1))
+				{
+					++Diagnostics.InconsistentOrientationEdgeCount;
+				}
+			}
+		}
+
+		double EdgeLengthSum = 0.0;
+		double MinEdgeLength = TNumericLimits<double>::Max();
+		double MaxEdgeLength = 0.0;
+		for (const TPair<FString, double>& Pair : EdgeLengthByKey)
+		{
+			EdgeLengthSum += Pair.Value;
+			MinEdgeLength = FMath::Min(MinEdgeLength, Pair.Value);
+			MaxEdgeLength = FMath::Max(MaxEdgeLength, Pair.Value);
+		}
+
+		Diagnostics.MinTriangleArea = MinTriangleArea == TNumericLimits<double>::Max() ? 0.0 : MinTriangleArea;
+		Diagnostics.MaxTriangleArea = MaxTriangleArea;
+		Diagnostics.AbsVolume = FMath::Abs(Diagnostics.SignedVolume);
+		Diagnostics.SignedVolumeBeforeOrientationFix = Diagnostics.SignedVolume;
+		Diagnostics.SignedVolumeAfterOrientationFix = Diagnostics.SignedVolume;
+		Diagnostics.MinEdgeLength = MinEdgeLength == TNumericLimits<double>::Max() ? 0.0 : MinEdgeLength;
+		Diagnostics.MaxEdgeLength = MaxEdgeLength;
+		Diagnostics.MeanEdgeLength = EdgeLengthByKey.Num() > 0 ? EdgeLengthSum / double(EdgeLengthByKey.Num()) : 0.0;
+		return Diagnostics;
+	}
+
+	static bool NormalizeStep11MeshOrientationForBoolean(
+		UE::Geometry::FDynamicMesh3& Mesh,
+		FStep11MeshDiagnostics& Diagnostics)
+	{
+		constexpr double SignedVolumeTolerance = 1e-6;
+		const double SignedVolumeBefore = Diagnostics.SignedVolume;
+		if (SignedVolumeBefore >= -SignedVolumeTolerance)
+		{
+			Diagnostics.SignedVolumeBeforeOrientationFix = SignedVolumeBefore;
+			Diagnostics.SignedVolumeAfterOrientationFix = SignedVolumeBefore;
+			Diagnostics.bOrientationReversedForBoolean = false;
+			return false;
+		}
+
+		const FString Label = Diagnostics.Label;
+		const FString SourceType = Diagnostics.SourceType;
+		Mesh.ReverseOrientation(false);
+		Diagnostics = AnalyzeStep11DynamicMesh(Mesh, Label, SourceType);
+		Diagnostics.SignedVolumeBeforeOrientationFix = SignedVolumeBefore;
+		Diagnostics.SignedVolumeAfterOrientationFix = Diagnostics.SignedVolume;
+		Diagnostics.bOrientationReversedForBoolean = true;
+
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("Step11Diag: reversed mesh orientation for boolean label=%s source=%s signed_volume_before=%.6f signed_volume_after=%.6f."),
+			*Diagnostics.Label,
+			*Diagnostics.SourceType,
+			SignedVolumeBefore,
+			Diagnostics.SignedVolume);
+		return true;
+	}
+
+	static int32 Step11SignedVolumeSign(double SignedVolume)
+	{
+		constexpr double SignedVolumeTolerance = 1e-6;
+		if (SignedVolume > SignedVolumeTolerance)
+		{
+			return 1;
+		}
+		if (SignedVolume < -SignedVolumeTolerance)
+		{
+			return -1;
+		}
+		return 0;
+	}
+
+	static bool ReverseStep11MeshIfSignMismatch(UE::Geometry::FDynamicMesh3& Mesh, int32 DesiredSign)
+	{
+		if (DesiredSign == 0)
+		{
+			return false;
+		}
+
+		const FStep11MeshDiagnostics Diagnostics = AnalyzeStep11DynamicMesh(Mesh, TEXT("orientation_check"), TEXT("orientation_check"));
+		const int32 CurrentSign = Step11SignedVolumeSign(Diagnostics.SignedVolume);
+		if (CurrentSign != 0 && CurrentSign != DesiredSign)
+		{
+			Mesh.ReverseOrientation(false);
+			return true;
+		}
+		return false;
+	}
+
+	struct FStep11BooleanAttemptResult
+	{
+		bool bComputeSuccess = false;
+		bool bAccepted = false;
+		bool bEmptyResult = false;
+		bool bTargetReversedForPass = false;
+		bool bCutterReversedForPass = false;
+		bool bResultReversedToTargetSign = false;
+		FString PassName;
+		FString Status;
+		FString RejectReason;
+		double VolumeDelta = 0.0;
+		double MinRequiredVolumeDelta = 0.0;
+		FStep11MeshDiagnostics ResultDiagnostics;
+		UE::Geometry::FDynamicMesh3 ResultMesh;
+		TArray<int8> TriangleSourceMeshById;
+	};
+
+	static TSharedRef<FJsonObject> Step11BoxJson(const FBox& Box)
+	{
+		TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetBoolField(TEXT("valid"), Box.IsValid != 0);
+		if (Box.IsValid)
+		{
+			Object->SetArrayField(TEXT("min"), JsonVector(Box.Min)->AsArray());
+			Object->SetArrayField(TEXT("max"), JsonVector(Box.Max)->AsArray());
+			Object->SetArrayField(TEXT("center"), JsonVector(Box.GetCenter())->AsArray());
+			Object->SetArrayField(TEXT("extent"), JsonVector(Box.GetExtent())->AsArray());
+			Object->SetArrayField(TEXT("size"), JsonVector(Box.GetSize())->AsArray());
+			Object->SetNumberField(TEXT("diagonal"), Box.GetSize().Size());
+		}
+		return Object;
+	}
+
+	static TSharedRef<FJsonObject> Step11MeshDiagnosticsJson(const FStep11MeshDiagnostics& Diagnostics)
+	{
+		TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetStringField(TEXT("label"), Diagnostics.Label);
+		Object->SetStringField(TEXT("source_type"), Diagnostics.SourceType);
+		Object->SetNumberField(TEXT("vertex_count"), Diagnostics.VertexCount);
+		Object->SetNumberField(TEXT("triangle_count"), Diagnostics.TriangleCount);
+		Object->SetNumberField(TEXT("edge_count"), Diagnostics.EdgeCount);
+		Object->SetNumberField(TEXT("boundary_edge_count"), Diagnostics.BoundaryEdgeCount);
+		Object->SetNumberField(TEXT("non_manifold_edge_count"), Diagnostics.NonManifoldEdgeCount);
+		Object->SetNumberField(TEXT("inconsistent_orientation_edge_count"), Diagnostics.InconsistentOrientationEdgeCount);
+		Object->SetNumberField(TEXT("invalid_triangle_count"), Diagnostics.InvalidTriangleCount);
+		Object->SetNumberField(TEXT("degenerate_triangle_count"), Diagnostics.DegenerateTriangleCount);
+		Object->SetNumberField(TEXT("tiny_triangle_count"), Diagnostics.TinyTriangleCount);
+		Object->SetNumberField(TEXT("duplicate_triangle_count"), Diagnostics.DuplicateTriangleCount);
+		Object->SetNumberField(TEXT("surface_area"), Diagnostics.SurfaceArea);
+		Object->SetNumberField(TEXT("min_triangle_area"), Diagnostics.MinTriangleArea);
+		Object->SetNumberField(TEXT("max_triangle_area"), Diagnostics.MaxTriangleArea);
+		Object->SetNumberField(TEXT("signed_volume"), Diagnostics.SignedVolume);
+		Object->SetNumberField(TEXT("abs_volume"), Diagnostics.AbsVolume);
+		Object->SetBoolField(TEXT("orientation_reversed_for_boolean"), Diagnostics.bOrientationReversedForBoolean);
+		Object->SetNumberField(TEXT("signed_volume_before_orientation_fix"), Diagnostics.SignedVolumeBeforeOrientationFix);
+		Object->SetNumberField(TEXT("signed_volume_after_orientation_fix"), Diagnostics.SignedVolumeAfterOrientationFix);
+		Object->SetNumberField(TEXT("min_edge_length"), Diagnostics.MinEdgeLength);
+		Object->SetNumberField(TEXT("max_edge_length"), Diagnostics.MaxEdgeLength);
+		Object->SetNumberField(TEXT("mean_edge_length"), Diagnostics.MeanEdgeLength);
+		Object->SetNumberField(TEXT("euler_characteristic"), Diagnostics.VertexCount - Diagnostics.EdgeCount + Diagnostics.TriangleCount);
+		Object->SetBoolField(TEXT("closed_two_manifold"), Diagnostics.BoundaryEdgeCount == 0 && Diagnostics.NonManifoldEdgeCount == 0);
+		Object->SetObjectField(TEXT("bounds"), Step11BoxJson(Diagnostics.Bounds));
+		return Object;
+	}
+
+	static TSharedRef<FJsonObject> Step11BooleanAttemptJson(const FStep11BooleanAttemptResult& Attempt)
+	{
+		TSharedRef<FJsonObject> Object = MakeShared<FJsonObject>();
+		Object->SetStringField(TEXT("pass_name"), Attempt.PassName);
+		Object->SetStringField(TEXT("status"), Attempt.Status);
+		Object->SetStringField(TEXT("reject_reason"), Attempt.RejectReason);
+		Object->SetBoolField(TEXT("compute_success"), Attempt.bComputeSuccess);
+		Object->SetBoolField(TEXT("accepted"), Attempt.bAccepted);
+		Object->SetBoolField(TEXT("empty_result"), Attempt.bEmptyResult);
+		Object->SetBoolField(TEXT("target_reversed_for_pass"), Attempt.bTargetReversedForPass);
+		Object->SetBoolField(TEXT("cutter_reversed_for_pass"), Attempt.bCutterReversedForPass);
+		Object->SetBoolField(TEXT("result_reversed_to_target_sign"), Attempt.bResultReversedToTargetSign);
+		Object->SetNumberField(TEXT("volume_delta"), Attempt.VolumeDelta);
+		Object->SetNumberField(TEXT("min_required_volume_delta"), Attempt.MinRequiredVolumeDelta);
+		if (Attempt.bComputeSuccess && !Attempt.bEmptyResult)
+		{
+			Object->SetObjectField(TEXT("result"), Step11MeshDiagnosticsJson(Attempt.ResultDiagnostics));
+		}
+		return Object;
+	}
+
+	static void LogStep11MeshDiagnostics(const FStep11MeshDiagnostics& Diagnostics)
+	{
+		const FVector BoundsMin = Diagnostics.Bounds.IsValid ? Diagnostics.Bounds.Min : FVector::ZeroVector;
+		const FVector BoundsMax = Diagnostics.Bounds.IsValid ? Diagnostics.Bounds.Max : FVector::ZeroVector;
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("Step11Diag: mesh label=%s source=%s vertices=%d triangles=%d edges=%d boundary=%d nonmanifold=%d inconsistent_orientation=%d invalid_triangles=%d degenerate=%d tiny=%d duplicate=%d area=%.6f signed_volume=%.6f abs_volume=%.6f orientation_reversed=%d signed_before=%.6f signed_after=%.6f min_edge=%.6f max_edge=%.6f mean_edge=%.6f bounds_min=(%.3f, %.3f, %.3f) bounds_max=(%.3f, %.3f, %.3f) closed_two_manifold=%d"),
+			*Diagnostics.Label,
+			*Diagnostics.SourceType,
+			Diagnostics.VertexCount,
+			Diagnostics.TriangleCount,
+			Diagnostics.EdgeCount,
+			Diagnostics.BoundaryEdgeCount,
+			Diagnostics.NonManifoldEdgeCount,
+			Diagnostics.InconsistentOrientationEdgeCount,
+			Diagnostics.InvalidTriangleCount,
+			Diagnostics.DegenerateTriangleCount,
+			Diagnostics.TinyTriangleCount,
+			Diagnostics.DuplicateTriangleCount,
+			Diagnostics.SurfaceArea,
+			Diagnostics.SignedVolume,
+			Diagnostics.AbsVolume,
+			Diagnostics.bOrientationReversedForBoolean ? 1 : 0,
+			Diagnostics.SignedVolumeBeforeOrientationFix,
+			Diagnostics.SignedVolumeAfterOrientationFix,
+			Diagnostics.MinEdgeLength,
+			Diagnostics.MaxEdgeLength,
+			Diagnostics.MeanEdgeLength,
+			BoundsMin.X,
+			BoundsMin.Y,
+			BoundsMin.Z,
+			BoundsMax.X,
+			BoundsMax.Y,
+			BoundsMax.Z,
+			Diagnostics.BoundaryEdgeCount == 0 && Diagnostics.NonManifoldEdgeCount == 0 ? 1 : 0);
+	}
+
+	static FString QuantizedVertexKey(const FVector& Position)
+	{
+		constexpr double WeldTolerance = 0.01;
+		const int64 X = FMath::RoundToInt64(Position.X / WeldTolerance);
+		const int64 Y = FMath::RoundToInt64(Position.Y / WeldTolerance);
+		const int64 Z = FMath::RoundToInt64(Position.Z / WeldTolerance);
+		return FString::Printf(TEXT("%lld_%lld_%lld"), X, Y, Z);
+	}
+
+	static bool BuildDynamicMeshFromStaticMeshComponent(UStaticMeshComponent* Component, UE::Geometry::FDynamicMesh3& OutMesh)
+	{
+		OutMesh = UE::Geometry::FDynamicMesh3();
+		if (!Component || !Component->IsRegistered() || !Component->IsVisible())
+		{
+			return false;
+		}
+
+		UStaticMesh* StaticMesh = Component->GetStaticMesh();
+		if (!StaticMesh || !StaticMesh->GetRenderData() || StaticMesh->GetRenderData()->LODResources.Num() == 0)
+		{
+			return false;
+		}
+
+		const FStaticMeshLODResources& LOD = StaticMesh->GetRenderData()->LODResources[0];
+		const FPositionVertexBuffer& PositionBuffer = LOD.VertexBuffers.PositionVertexBuffer;
+		const int32 NumRenderVertices = PositionBuffer.GetNumVertices();
+		const FIndexArrayView Indices = LOD.IndexBuffer.GetArrayView();
+		if (NumRenderVertices <= 0 || Indices.Num() < 3)
+		{
+			return false;
+		}
+
+		const FTransform& ComponentTransform = Component->GetComponentTransform();
+		TMap<FString, int32> VertexIdByPosition;
+		TArray<int32> RenderToDynamic;
+		RenderToDynamic.Init(UE::Geometry::FDynamicMesh3::InvalidID, NumRenderVertices);
+		for (int32 RenderVertexIndex = 0; RenderVertexIndex < NumRenderVertices; ++RenderVertexIndex)
+		{
+			const FVector3f LocalPosition = PositionBuffer.VertexPosition(RenderVertexIndex);
+			const FVector WorldPosition = ComponentTransform.TransformPosition(
+				FVector(double(LocalPosition.X), double(LocalPosition.Y), double(LocalPosition.Z)));
+			const FString Key = QuantizedVertexKey(WorldPosition);
+			if (const int32* ExistingId = VertexIdByPosition.Find(Key))
+			{
+				RenderToDynamic[RenderVertexIndex] = *ExistingId;
+			}
+			else
+			{
+				const int32 DynamicId = OutMesh.AppendVertex(FVector3d(WorldPosition.X, WorldPosition.Y, WorldPosition.Z));
+				VertexIdByPosition.Add(Key, DynamicId);
+				RenderToDynamic[RenderVertexIndex] = DynamicId;
+			}
+		}
+
+		int32 AddedTriangles = 0;
+		for (const FStaticMeshSection& Section : LOD.Sections)
+		{
+			for (uint32 TriIndex = 0; TriIndex < Section.NumTriangles; ++TriIndex)
+			{
+				const uint32 IndexBase = Section.FirstIndex + TriIndex * 3;
+				if (IndexBase + 2 >= uint32(Indices.Num()))
+				{
+					continue;
+				}
+
+				const int32 A = int32(Indices[IndexBase]);
+				const int32 B = int32(Indices[IndexBase + 1]);
+				const int32 C = int32(Indices[IndexBase + 2]);
+				if (!RenderToDynamic.IsValidIndex(A) || !RenderToDynamic.IsValidIndex(B) || !RenderToDynamic.IsValidIndex(C))
+				{
+					continue;
+				}
+
+				const int32 VA = RenderToDynamic[A];
+				const int32 VB = RenderToDynamic[B];
+				const int32 VC = RenderToDynamic[C];
+				if (VA == VB || VB == VC || VC == VA)
+				{
+					continue;
+				}
+
+				if (OutMesh.AppendTriangle(VA, VB, VC) >= 0)
+				{
+					++AddedTriangles;
+				}
+			}
+		}
+
+		return AddedTriangles > 0;
+	}
+
+	static bool BuildDynamicMeshFromWorldMesh(
+		const TArray<FVector>& Vertices,
+		const TArray<int32>& Triangles,
+		UE::Geometry::FDynamicMesh3& OutMesh)
+	{
+		OutMesh = UE::Geometry::FDynamicMesh3();
+		if (Vertices.Num() < 3 || Triangles.Num() < 3)
+		{
+			return false;
+		}
+
+		TArray<int32> VertexIds;
+		VertexIds.Reserve(Vertices.Num());
+		for (const FVector& V : Vertices)
+		{
+			VertexIds.Add(OutMesh.AppendVertex(FVector3d(V.X, V.Y, V.Z)));
+		}
+
+		int32 AddedTriangles = 0;
+		for (int32 i = 0; i + 2 < Triangles.Num(); i += 3)
+		{
+			const int32 A = Triangles[i];
+			const int32 B = Triangles[i + 1];
+			const int32 C = Triangles[i + 2];
+			if (!VertexIds.IsValidIndex(A) || !VertexIds.IsValidIndex(B) || !VertexIds.IsValidIndex(C))
+			{
+				continue;
+			}
+			if (OutMesh.AppendTriangle(VertexIds[A], VertexIds[B], VertexIds[C]) >= 0)
+			{
+				++AddedTriangles;
+			}
+		}
+		return AddedTriangles > 0;
+	}
+
+	static bool BuildDynamicMeshFromProceduralMeshComponent(UProceduralMeshComponent* Component, UE::Geometry::FDynamicMesh3& OutMesh)
+	{
+		OutMesh = UE::Geometry::FDynamicMesh3();
+		if (!Component || !Component->IsRegistered() || !Component->IsVisible())
+		{
+			return false;
+		}
+
+		const FTransform& ComponentTransform = Component->GetComponentTransform();
+		TMap<FString, int32> VertexIdByPosition;
+		int32 AddedTriangles = 0;
+		for (int32 SectionIndex = 0; SectionIndex < Component->GetNumSections(); ++SectionIndex)
+		{
+			if (!Component->IsMeshSectionVisible(SectionIndex))
+			{
+				continue;
+			}
+
+			const FProcMeshSection* Section = Component->GetProcMeshSection(SectionIndex);
+			if (!Section || Section->ProcVertexBuffer.Num() < 3 || Section->ProcIndexBuffer.Num() < 3)
+			{
+				continue;
+			}
+
+			TArray<int32> SectionVertexIds;
+			SectionVertexIds.Reserve(Section->ProcVertexBuffer.Num());
+			for (const FProcMeshVertex& Vertex : Section->ProcVertexBuffer)
+			{
+				const FVector WorldPosition = ComponentTransform.TransformPosition(Vertex.Position);
+				const FString Key = QuantizedVertexKey(WorldPosition);
+				if (const int32* ExistingId = VertexIdByPosition.Find(Key))
+				{
+					SectionVertexIds.Add(*ExistingId);
+				}
+				else
+				{
+					const int32 DynamicId = OutMesh.AppendVertex(FVector3d(WorldPosition.X, WorldPosition.Y, WorldPosition.Z));
+					VertexIdByPosition.Add(Key, DynamicId);
+					SectionVertexIds.Add(DynamicId);
+				}
+			}
+
+			for (int32 Index = 0; Index + 2 < Section->ProcIndexBuffer.Num(); Index += 3)
+			{
+				const int32 A = int32(Section->ProcIndexBuffer[Index]);
+				const int32 B = int32(Section->ProcIndexBuffer[Index + 1]);
+				const int32 C = int32(Section->ProcIndexBuffer[Index + 2]);
+				if (!SectionVertexIds.IsValidIndex(A) || !SectionVertexIds.IsValidIndex(B) || !SectionVertexIds.IsValidIndex(C))
+				{
+					continue;
+				}
+
+				const int32 VA = SectionVertexIds[A];
+				const int32 VB = SectionVertexIds[B];
+				const int32 VC = SectionVertexIds[C];
+				if (VA == VB || VB == VC || VC == VA)
+				{
+					continue;
+				}
+
+				if (OutMesh.AppendTriangle(VA, VB, VC) >= 0)
+				{
+					++AddedTriangles;
+				}
+			}
+		}
+
+		return AddedTriangles > 0;
+	}
+
+	static bool ConvertDynamicMeshToProceduralArrays(
+		const UE::Geometry::FDynamicMesh3& Mesh,
+		TArray<FVector>& OutVertices,
+		TArray<int32>& OutTriangles,
+		TArray<FVector>& OutNormals)
+	{
+		OutVertices.Reset();
+		OutTriangles.Reset();
+		OutNormals.Reset();
+		if (Mesh.VertexCount() <= 0 || Mesh.TriangleCount() <= 0)
+		{
+			return false;
+		}
+
+		TMap<int32, int32> CompactVertexIndex;
+		CompactVertexIndex.Reserve(Mesh.VertexCount());
+		OutVertices.Reserve(Mesh.VertexCount());
+		for (int32 VertexId : Mesh.VertexIndicesItr())
+		{
+			const FVector3d V = Mesh.GetVertex(VertexId);
+			CompactVertexIndex.Add(VertexId, OutVertices.Num());
+			OutVertices.Emplace(V.X, V.Y, V.Z);
+		}
+
+		OutTriangles.Reserve(Mesh.TriangleCount() * 3);
+		OutNormals.Init(FVector::ZeroVector, OutVertices.Num());
+		for (int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			const UE::Geometry::FIndex3i Tri = Mesh.GetTriangle(TriangleId);
+			const int32* A = CompactVertexIndex.Find(Tri.A);
+			const int32* B = CompactVertexIndex.Find(Tri.B);
+			const int32* C = CompactVertexIndex.Find(Tri.C);
+			if (!A || !B || !C)
+			{
+				continue;
+			}
+
+			OutTriangles.Add(*A);
+			OutTriangles.Add(*B);
+			OutTriangles.Add(*C);
+			const FVector& VA = OutVertices[*A];
+			const FVector& VB = OutVertices[*B];
+			const FVector& VC = OutVertices[*C];
+			const FVector TriNormal = FVector::CrossProduct(VB - VA, VC - VA).GetSafeNormal();
+			OutNormals[*A] += TriNormal;
+			OutNormals[*B] += TriNormal;
+			OutNormals[*C] += TriNormal;
+		}
+
+		for (FVector& Normal : OutNormals)
+		{
+			Normal = Normal.GetSafeNormal();
+			if (Normal.IsNearlyZero())
+			{
+				Normal = FVector::UpVector;
+			}
+		}
+		return OutVertices.Num() >= 3 && OutTriangles.Num() >= 3;
+	}
+
+	struct FStep11ProcMeshSectionData
+	{
+		TArray<FVector> Vertices;
+		TArray<int32> Triangles;
+		TArray<FVector> Normals;
+		TArray<FVector2D> UV0;
+		TArray<FColor> Colors;
+		TArray<FProcMeshTangent> Tangents;
+
+		bool HasGeometry() const
+		{
+			return Vertices.Num() >= 3 && Triangles.Num() >= 3;
+		}
+	};
+
+	static FVector Step11StableTangent(const FVector& Normal)
+	{
+		FVector Tangent = FVector::CrossProduct(FVector::UpVector, Normal);
+		if (Tangent.IsNearlyZero())
+		{
+			Tangent = FVector::CrossProduct(FVector::RightVector, Normal);
+		}
+		Tangent.Normalize();
+		return Tangent.IsNearlyZero() ? FVector::ForwardVector : Tangent;
+	}
+
+	static FVector2D Step11PlanarUV(const FVector& WorldPosition, const FVector& Normal)
+	{
+		constexpr double UvScaleCm = 100.0;
+		const FVector AbsNormal(FMath::Abs(Normal.X), FMath::Abs(Normal.Y), FMath::Abs(Normal.Z));
+		if (AbsNormal.Z >= AbsNormal.X && AbsNormal.Z >= AbsNormal.Y)
+		{
+			return FVector2D(WorldPosition.X / UvScaleCm, WorldPosition.Y / UvScaleCm);
+		}
+		if (AbsNormal.Y >= AbsNormal.X)
+		{
+			return FVector2D(WorldPosition.X / UvScaleCm, WorldPosition.Z / UvScaleCm);
+		}
+		return FVector2D(WorldPosition.Y / UvScaleCm, WorldPosition.Z / UvScaleCm);
+	}
+
+	static void AppendStep11FlatTriangle(
+		FStep11ProcMeshSectionData& Section,
+		const FVector& AWorld,
+		const FVector& BWorld,
+		const FVector& CWorld,
+		const FVector& Origin,
+		const FColor& Color)
+	{
+		FVector Normal = FVector::CrossProduct(BWorld - AWorld, CWorld - AWorld).GetSafeNormal();
+		if (Normal.IsNearlyZero())
+		{
+			Normal = FVector::UpVector;
+		}
+		const FVector Tangent = Step11StableTangent(Normal);
+		const int32 BaseIndex = Section.Vertices.Num();
+		Section.Vertices.Add(AWorld - Origin);
+		Section.Vertices.Add(BWorld - Origin);
+		Section.Vertices.Add(CWorld - Origin);
+		Section.Triangles.Add(BaseIndex);
+		Section.Triangles.Add(BaseIndex + 1);
+		Section.Triangles.Add(BaseIndex + 2);
+		Section.Normals.Add(Normal);
+		Section.Normals.Add(Normal);
+		Section.Normals.Add(Normal);
+		Section.UV0.Add(Step11PlanarUV(AWorld, Normal));
+		Section.UV0.Add(Step11PlanarUV(BWorld, Normal));
+		Section.UV0.Add(Step11PlanarUV(CWorld, Normal));
+		Section.Colors.Add(Color);
+		Section.Colors.Add(Color);
+		Section.Colors.Add(Color);
+		Section.Tangents.Add(FProcMeshTangent(Tangent, false));
+		Section.Tangents.Add(FProcMeshTangent(Tangent, false));
+		Section.Tangents.Add(FProcMeshTangent(Tangent, false));
+	}
+
+	static bool ConvertDynamicMeshToFlatProceduralSections(
+		const UE::Geometry::FDynamicMesh3& Mesh,
+		const FVector& Origin,
+		const TArray<int8>* TriangleSourceMeshById,
+		FStep11ProcMeshSectionData& OutSourceSection,
+		FStep11ProcMeshSectionData& OutCapSection)
+	{
+		OutSourceSection = FStep11ProcMeshSectionData();
+		OutCapSection = FStep11ProcMeshSectionData();
+		if (Mesh.TriangleCount() <= 0)
+		{
+			return false;
+		}
+
+		for (int32 TriangleId : Mesh.TriangleIndicesItr())
+		{
+			const UE::Geometry::FIndex3i Tri = Mesh.GetTriangle(TriangleId);
+			if (!Mesh.IsVertex(Tri.A) || !Mesh.IsVertex(Tri.B) || !Mesh.IsVertex(Tri.C))
+			{
+				continue;
+			}
+
+			const FVector3d A3 = Mesh.GetVertex(Tri.A);
+			const FVector3d B3 = Mesh.GetVertex(Tri.B);
+			const FVector3d C3 = Mesh.GetVertex(Tri.C);
+			const FVector A(A3.X, A3.Y, A3.Z);
+			const FVector B(B3.X, B3.Y, B3.Z);
+			const FVector C(C3.X, C3.Y, C3.Z);
+			if (FVector::CrossProduct(B - A, C - A).IsNearlyZero())
+			{
+				continue;
+			}
+
+			const bool bFromCutter = TriangleSourceMeshById &&
+				TriangleSourceMeshById->IsValidIndex(TriangleId) &&
+				(*TriangleSourceMeshById)[TriangleId] == 1;
+			AppendStep11FlatTriangle(
+				bFromCutter ? OutCapSection : OutSourceSection,
+				A,
+				B,
+				C,
+				Origin,
+				bFromCutter ? FColor(180, 180, 180, 255) : FColor::White);
+		}
+
+		return OutSourceSection.HasGeometry() || OutCapSection.HasGeometry();
+	}
+
+	static FStep11BooleanAttemptResult RunStep11BooleanDifferencePass(
+		const UE::Geometry::FDynamicMesh3& CurrentMesh,
+		const UE::Geometry::FDynamicMesh3& CutterMesh,
+		const FStep11MeshDiagnostics& TargetBeforeDiagnostics,
+		int32 TargetRenderSign,
+		bool bReverseTargetForPass,
+		const FString& PassName,
+		const FString& ResultLabel)
+	{
+		FStep11BooleanAttemptResult Attempt;
+		Attempt.PassName = PassName;
+		Attempt.MinRequiredVolumeDelta = FMath::Max(1.0, TargetBeforeDiagnostics.AbsVolume * 1e-4);
+		if (TargetBeforeDiagnostics.AbsVolume <= 1e-6 || TargetRenderSign == 0)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("target_zero_volume");
+			return Attempt;
+		}
+
+		UE::Geometry::FDynamicMesh3 TargetWork = CurrentMesh;
+		UE::Geometry::FDynamicMesh3 CutterWork = CutterMesh;
+		const int32 WorkingTargetSign = bReverseTargetForPass ? -TargetRenderSign : TargetRenderSign;
+		if (bReverseTargetForPass)
+		{
+			TargetWork.ReverseOrientation(false);
+			Attempt.bTargetReversedForPass = true;
+		}
+		Attempt.bCutterReversedForPass = ReverseStep11MeshIfSignMismatch(CutterWork, WorkingTargetSign);
+
+		UE::Geometry::FMeshBoolean MeshBoolean(
+			&TargetWork,
+			&CutterWork,
+			&Attempt.ResultMesh,
+			UE::Geometry::FMeshBoolean::EBooleanOp::Difference);
+		MeshBoolean.SnapTolerance = Step11BooleanSnapToleranceCm;
+		MeshBoolean.DegenerateEdgeTolFactor = 2.0;
+		MeshBoolean.bCollapseDegenerateEdgesOnCut = true;
+		MeshBoolean.bPutResultInInputSpace = true;
+		MeshBoolean.bWeldSharedEdges = true;
+		MeshBoolean.bTrackAllNewEdges = true;
+		MeshBoolean.bSimplifyAlongNewEdges = true;
+		MeshBoolean.SimplificationAngleTolerance = 0.25;
+		MeshBoolean.TryToImproveTriQualityThreshold = 0.2;
+		MeshBoolean.bPreserveTriangleGroups = false;
+		MeshBoolean.bPreserveVertexUVs = false;
+		MeshBoolean.bPreserveOverlayUVs = false;
+		MeshBoolean.bPreserveVertexNormals = false;
+		MeshBoolean.TrackPerTriangleSourceMesh.Emplace();
+
+		Attempt.bComputeSuccess = MeshBoolean.Compute();
+		if (!Attempt.bComputeSuccess)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("compute_failed");
+			return Attempt;
+		}
+
+		if (Attempt.ResultMesh.TriangleCount() <= 0)
+		{
+			Attempt.bAccepted = true;
+			Attempt.bEmptyResult = true;
+			Attempt.Status = TEXT("success_empty_result");
+			Attempt.VolumeDelta = TargetBeforeDiagnostics.AbsVolume;
+			return Attempt;
+		}
+
+		if (MeshBoolean.TrackPerTriangleSourceMesh.IsSet())
+		{
+			Attempt.TriangleSourceMeshById = MoveTemp(MeshBoolean.TrackPerTriangleSourceMesh.GetValue());
+		}
+
+		Attempt.ResultDiagnostics = AnalyzeStep11DynamicMesh(Attempt.ResultMesh, ResultLabel, TEXT("boolean_result"));
+		const int32 ResultSign = Step11SignedVolumeSign(Attempt.ResultDiagnostics.SignedVolume);
+		if (ResultSign != 0 && ResultSign != TargetRenderSign)
+		{
+			Attempt.ResultMesh.ReverseOrientation(false);
+			Attempt.bResultReversedToTargetSign = true;
+			Attempt.ResultDiagnostics = AnalyzeStep11DynamicMesh(Attempt.ResultMesh, ResultLabel, TEXT("boolean_result"));
+		}
+
+		Attempt.VolumeDelta = TargetBeforeDiagnostics.AbsVolume - Attempt.ResultDiagnostics.AbsVolume;
+		if (Attempt.ResultDiagnostics.BoundaryEdgeCount > 0)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("open_boundary");
+			return Attempt;
+		}
+		if (Attempt.ResultDiagnostics.NonManifoldEdgeCount > 0)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("nonmanifold_result");
+			return Attempt;
+		}
+		if (Attempt.VolumeDelta < Attempt.MinRequiredVolumeDelta)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("no_volume_removed");
+			return Attempt;
+		}
+		if (Attempt.ResultDiagnostics.MinEdgeLength > 0.0 &&
+			Attempt.ResultDiagnostics.MinEdgeLength < Step11BooleanMinRenderableEdgeCm)
+		{
+			Attempt.Status = TEXT("rejected");
+			Attempt.RejectReason = TEXT("tiny_edges_after_boolean");
+			return Attempt;
+		}
+
+		Attempt.bAccepted = true;
+		Attempt.Status = TEXT("accepted");
+		return Attempt;
+	}
+
+	static bool ApplyCuttersToDynamicMesh(
+		UE::Geometry::FDynamicMesh3& CurrentMesh,
+		const FString& TargetActorName,
+		const FString& TargetComponentName,
+		const FString& TargetSourceType,
+		const TArray<const FReconstructedMesh*>& Cutters,
+		const TArray<UE::Geometry::FDynamicMesh3>& CutterMeshes,
+		const TArray<FBox>& CutterBounds,
+		const TArray<FStep11MeshDiagnostics>& CutterDiagnostics,
+		TArray<TSharedPtr<FJsonValue>>* OutOperationDiagnostics,
+		TArray<int8>& OutFinalTriangleSourceMeshById,
+		TSet<FString>& OutAcceptedCutterActorNames,
+		bool& bOutEmptyResult,
+		int32& FailedBooleanCount)
+	{
+		bOutEmptyResult = false;
+		bool bModified = false;
+		for (int32 CutterIndex = 0; CutterIndex < CutterMeshes.Num(); ++CutterIndex)
+		{
+			const FString TargetLabel = FString::Printf(TEXT("%s/%s"), *TargetActorName, *TargetComponentName);
+			FStep11MeshDiagnostics TargetBeforeDiagnostics = AnalyzeStep11DynamicMesh(CurrentMesh, TargetLabel, TargetSourceType);
+			const FBox TargetBounds = TargetBeforeDiagnostics.Bounds;
+			const FBox ExpandedTargetBounds = TargetBounds.ExpandBy(Step11BooleanBoundsExpandCm);
+			const FBox ExpandedCutterBounds = CutterBounds[CutterIndex].ExpandBy(Step11BooleanBoundsExpandCm);
+			const bool bBoundsIntersect = TargetBounds.Intersect(CutterBounds[CutterIndex]);
+			const bool bExpandedBoundsIntersect = ExpandedTargetBounds.Intersect(ExpandedCutterBounds);
+			const double CenterDistance = (TargetBounds.IsValid && CutterBounds[CutterIndex].IsValid)
+				? FVector::Distance(TargetBounds.GetCenter(), CutterBounds[CutterIndex].GetCenter())
+				: 0.0;
+			const int32 TargetRenderSign = Step11SignedVolumeSign(TargetBeforeDiagnostics.SignedVolume);
+
+			TSharedRef<FJsonObject> OperationJson = MakeShared<FJsonObject>();
+			OperationJson->SetStringField(TEXT("target_actor"), TargetActorName);
+			OperationJson->SetStringField(TEXT("target_component"), TargetComponentName);
+			OperationJson->SetStringField(TEXT("target_source_type"), TargetSourceType);
+			OperationJson->SetStringField(TEXT("cutter_actor"), Cutters[CutterIndex]->ActorName);
+			OperationJson->SetNumberField(TEXT("cutter_index"), CutterIndex);
+			OperationJson->SetBoolField(TEXT("bounds_intersect"), bBoundsIntersect);
+			OperationJson->SetBoolField(TEXT("expanded_bounds_intersect"), bExpandedBoundsIntersect);
+			OperationJson->SetNumberField(TEXT("center_distance"), CenterDistance);
+			OperationJson->SetObjectField(TEXT("target_bounds"), Step11BoxJson(TargetBounds));
+			OperationJson->SetObjectField(TEXT("cutter_bounds"), Step11BoxJson(CutterBounds[CutterIndex]));
+			OperationJson->SetObjectField(TEXT("target_before"), Step11MeshDiagnosticsJson(TargetBeforeDiagnostics));
+			OperationJson->SetNumberField(TEXT("target_render_sign"), TargetRenderSign);
+			OperationJson->SetNumberField(TEXT("snap_tolerance_cm"), Step11BooleanSnapToleranceCm);
+			OperationJson->SetNumberField(TEXT("min_renderable_edge_cm"), Step11BooleanMinRenderableEdgeCm);
+			if (CutterDiagnostics.IsValidIndex(CutterIndex))
+			{
+				OperationJson->SetObjectField(TEXT("cutter_diagnostics"), Step11MeshDiagnosticsJson(CutterDiagnostics[CutterIndex]));
+			}
+
+			UE_LOG(
+				LogTemp,
+				Log,
+				TEXT("Step11Diag: pair target=%s/%s source=%s cutter=%s bounds_intersect=%d expanded_bounds_intersect=%d center_distance=%.6f target_triangles=%d cutter_triangles=%d"),
+				*TargetActorName,
+				*TargetComponentName,
+				*TargetSourceType,
+				*Cutters[CutterIndex]->ActorName,
+				bBoundsIntersect ? 1 : 0,
+				bExpandedBoundsIntersect ? 1 : 0,
+				CenterDistance,
+				TargetBeforeDiagnostics.TriangleCount,
+				CutterDiagnostics.IsValidIndex(CutterIndex) ? CutterDiagnostics[CutterIndex].TriangleCount : CutterMeshes[CutterIndex].TriangleCount());
+
+			if (!bExpandedBoundsIntersect)
+			{
+				OperationJson->SetStringField(TEXT("status"), TEXT("skipped_bounds_no_intersection"));
+				if (OutOperationDiagnostics)
+				{
+					OutOperationDiagnostics->Add(MakeShared<FJsonValueObject>(OperationJson));
+				}
+				continue;
+			}
+
+			TArray<TSharedPtr<FJsonValue>> AttemptDiagnostics;
+			FStep11BooleanAttemptResult PrimaryAttempt = RunStep11BooleanDifferencePass(
+				CurrentMesh,
+				CutterMeshes[CutterIndex],
+				TargetBeforeDiagnostics,
+				TargetRenderSign,
+				false,
+				TEXT("primary_target_render_orientation"),
+				FString::Printf(TEXT("%s/%s result_after_%s_primary"), *TargetActorName, *TargetComponentName, *Cutters[CutterIndex]->ActorName));
+			AttemptDiagnostics.Add(MakeShared<FJsonValueObject>(Step11BooleanAttemptJson(PrimaryAttempt)));
+			FStep11BooleanAttemptResult AcceptedAttempt = MoveTemp(PrimaryAttempt);
+			if (!AcceptedAttempt.bAccepted)
+			{
+				FStep11BooleanAttemptResult FallbackAttempt = RunStep11BooleanDifferencePass(
+					CurrentMesh,
+					CutterMeshes[CutterIndex],
+					TargetBeforeDiagnostics,
+					TargetRenderSign,
+					true,
+					TEXT("fallback_reversed_pair_orientation"),
+					FString::Printf(TEXT("%s/%s result_after_%s_fallback"), *TargetActorName, *TargetComponentName, *Cutters[CutterIndex]->ActorName));
+				AttemptDiagnostics.Add(MakeShared<FJsonValueObject>(Step11BooleanAttemptJson(FallbackAttempt)));
+				if (FallbackAttempt.bAccepted)
+				{
+					AcceptedAttempt = MoveTemp(FallbackAttempt);
+				}
+			}
+
+			OperationJson->SetArrayField(TEXT("attempts"), AttemptDiagnostics);
+			if (AcceptedAttempt.bAccepted && !AcceptedAttempt.bEmptyResult)
+			{
+				OperationJson->SetStringField(TEXT("status"), TEXT("accepted_non_empty"));
+				OperationJson->SetObjectField(TEXT("accepted_result"), Step11MeshDiagnosticsJson(AcceptedAttempt.ResultDiagnostics));
+				OperationJson->SetStringField(TEXT("accepted_pass"), AcceptedAttempt.PassName);
+				OperationJson->SetNumberField(TEXT("volume_delta"), AcceptedAttempt.VolumeDelta);
+				OperationJson->SetNumberField(TEXT("min_required_volume_delta"), AcceptedAttempt.MinRequiredVolumeDelta);
+				LogStep11MeshDiagnostics(AcceptedAttempt.ResultDiagnostics);
+				UE_LOG(
+					LogTemp,
+					Log,
+					TEXT("Step11Diag: boolean accepted target=%s/%s cutter=%s pass=%s result_triangles=%d volume_delta=%.6f result_boundary=%d result_nonmanifold=%d"),
+					*TargetActorName,
+					*TargetComponentName,
+					*Cutters[CutterIndex]->ActorName,
+					*AcceptedAttempt.PassName,
+					AcceptedAttempt.ResultDiagnostics.TriangleCount,
+					AcceptedAttempt.VolumeDelta,
+					AcceptedAttempt.ResultDiagnostics.BoundaryEdgeCount,
+					AcceptedAttempt.ResultDiagnostics.NonManifoldEdgeCount);
+				CurrentMesh = MoveTemp(AcceptedAttempt.ResultMesh);
+				OutFinalTriangleSourceMeshById = MoveTemp(AcceptedAttempt.TriangleSourceMeshById);
+				OutAcceptedCutterActorNames.Add(Cutters[CutterIndex]->ActorName);
+				bModified = true;
+			}
+			else if (AcceptedAttempt.bAccepted)
+			{
+				OperationJson->SetStringField(TEXT("status"), TEXT("accepted_empty_result"));
+				OperationJson->SetStringField(TEXT("accepted_pass"), AcceptedAttempt.PassName);
+				UE_LOG(
+					LogTemp,
+					Log,
+					TEXT("Step11Diag: boolean accepted empty result target=%s/%s cutter=%s pass=%s."),
+					*TargetActorName,
+					*TargetComponentName,
+					*Cutters[CutterIndex]->ActorName,
+					*AcceptedAttempt.PassName);
+				OutAcceptedCutterActorNames.Add(Cutters[CutterIndex]->ActorName);
+				bModified = true;
+				bOutEmptyResult = true;
+				if (OutOperationDiagnostics)
+				{
+					OutOperationDiagnostics->Add(MakeShared<FJsonValueObject>(OperationJson));
+				}
+				break;
+			}
+			else
+			{
+				++FailedBooleanCount;
+				OperationJson->SetStringField(TEXT("status"), TEXT("rejected"));
+				OperationJson->SetStringField(TEXT("reject_reason"), AcceptedAttempt.RejectReason.IsEmpty() ? TEXT("compute_failed") : AcceptedAttempt.RejectReason);
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("Step11: boolean subtract rejected for actor=%s component=%s cutter=%s reason=%s."),
+					*TargetActorName,
+					*TargetComponentName,
+					*Cutters[CutterIndex]->ActorName,
+					*OperationJson->GetStringField(TEXT("reject_reason")));
+			}
+
+			if (OutOperationDiagnostics)
+			{
+				OutOperationDiagnostics->Add(MakeShared<FJsonValueObject>(OperationJson));
+			}
+		}
+
+		return bModified;
+	}
+
+	static bool UpdateBooleanResultComponent(UProceduralMeshComponent* Component, const UE::Geometry::FDynamicMesh3& Mesh)
+	{
+		if (!Component)
+		{
+			return false;
+		}
+
+		TArray<FVector> Vertices;
+		TArray<int32> Triangles;
+		TArray<FVector> Normals;
+		if (!ConvertDynamicMeshToProceduralArrays(Mesh, Vertices, Triangles, Normals))
+		{
+			return false;
+		}
+
+		UMaterialInterface* Material = Component->GetMaterial(0);
+		const ECollisionEnabled::Type CollisionEnabled = Component->GetCollisionEnabled();
+		Component->ClearAllMeshSections();
+		Component->SetWorldTransform(FTransform::Identity, false, nullptr, ETeleportType::TeleportPhysics);
+
+		TArray<FVector2D> UV0;
+		UV0.Init(FVector2D::ZeroVector, Vertices.Num());
+		TArray<FColor> Colors;
+		Colors.Init(FColor::White, Vertices.Num());
+		TArray<FProcMeshTangent> Tangents;
+		Component->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, Colors, Tangents, CollisionEnabled != ECollisionEnabled::NoCollision);
+		Component->SetMaterial(0, Material);
+		return true;
+	}
+
+	static UProceduralMeshComponent* CreateBooleanResultComponent(
+		AActor* Owner,
+		UStaticMeshComponent* SourceComponent,
+		const UE::Geometry::FDynamicMesh3& Mesh)
+	{
+		if (!Owner || !SourceComponent)
+		{
+			return nullptr;
+		}
+
+		TArray<FVector> Vertices;
+		TArray<int32> Triangles;
+		TArray<FVector> Normals;
+		if (!ConvertDynamicMeshToProceduralArrays(Mesh, Vertices, Triangles, Normals))
+		{
+			return nullptr;
+		}
+
+		const FName ComponentName = MakeUniqueObjectName(Owner, UProceduralMeshComponent::StaticClass(), TEXT("FromLZ_Step11BooleanMesh"));
+		UProceduralMeshComponent* ResultComponent = NewObject<UProceduralMeshComponent>(Owner, ComponentName);
+		if (!ResultComponent)
+		{
+			return nullptr;
+		}
+
+		ResultComponent->ComponentTags.AddUnique(Step11BooleanResultTag);
+		ResultComponent->SetMobility(EComponentMobility::Movable);
+		ResultComponent->SetCollisionEnabled(SourceComponent->GetCollisionEnabled());
+		ResultComponent->bUseAsyncCooking = false;
+		ResultComponent->SetCastShadow(SourceComponent->CastShadow);
+		Owner->AddInstanceComponent(ResultComponent);
+
+		TArray<FVector2D> UV0;
+		UV0.Init(FVector2D::ZeroVector, Vertices.Num());
+		TArray<FColor> Colors;
+		Colors.Init(FColor::White, Vertices.Num());
+		TArray<FProcMeshTangent> Tangents;
+		ResultComponent->CreateMeshSection(0, Vertices, Triangles, Normals, UV0, Colors, Tangents, SourceComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+		ResultComponent->SetMaterial(0, SourceComponent->GetMaterial(0));
+		ResultComponent->RegisterComponent();
+		ResultComponent->SetWorldTransform(FTransform::Identity);
+		return ResultComponent;
+	}
+
+	static AActor* CreateBooleanResultActor(
+		UWorld* World,
+		UPrimitiveComponent* SourceComponent,
+		const FString& SourceActorName,
+		const FString& SourceComponentName,
+		const FString& PressId,
+		const UE::Geometry::FDynamicMesh3& Mesh,
+		const TArray<int8>& TriangleSourceMeshById)
+	{
+		if (!World || !SourceComponent || Mesh.TriangleCount() <= 0)
+		{
+			return nullptr;
+		}
+
+		const FBox Bounds = BuildDynamicMeshBounds(Mesh);
+		const FVector Origin = Bounds.IsValid ? Bounds.GetCenter() : FVector::ZeroVector;
+		FStep11ProcMeshSectionData SourceSection;
+		FStep11ProcMeshSectionData CapSection;
+		const TArray<int8>* SourceMapPtr = TriangleSourceMeshById.Num() > 0 ? &TriangleSourceMeshById : nullptr;
+		if (!ConvertDynamicMeshToFlatProceduralSections(Mesh, Origin, SourceMapPtr, SourceSection, CapSection))
+		{
+			return nullptr;
+		}
+
+		const FString BaseName = ObjSafeName(FString::Printf(TEXT("FromLZ_BooleanResult_%s_%s"), *SourceActorName, *SourceComponentName));
+		FActorSpawnParameters Params;
+		Params.Name = MakeUniqueObjectName(World->GetCurrentLevel(), AActor::StaticClass(), FName(*BaseName));
+		AActor* ResultActor = World->SpawnActor<AActor>(AActor::StaticClass(), FTransform(Origin), Params);
+		if (!ResultActor)
+		{
+			return nullptr;
+		}
+
+		ResultActor->Tags.AddUnique(Step11BooleanResultTag);
+		ResultActor->Tags.AddUnique(Step11PressTag(PressId));
+#if WITH_EDITOR
+		ResultActor->SetActorLabel(BaseName);
+#endif
+
+		UProceduralMeshComponent* MeshComponent = NewObject<UProceduralMeshComponent>(ResultActor, TEXT("FromLZ_Step11BooleanMesh"));
+		if (!MeshComponent)
+		{
+			ResultActor->Destroy();
+			return nullptr;
+		}
+
+		MeshComponent->ComponentTags.AddUnique(Step11BooleanResultTag);
+		MeshComponent->ComponentTags.AddUnique(Step11PressTag(PressId));
+		MeshComponent->SetMobility(EComponentMobility::Movable);
+		MeshComponent->SetCollisionEnabled(SourceComponent->GetCollisionEnabled());
+		MeshComponent->bUseAsyncCooking = false;
+		MeshComponent->SetCastShadow(SourceComponent->CastShadow);
+		ResultActor->SetRootComponent(MeshComponent);
+		ResultActor->AddInstanceComponent(MeshComponent);
+		MeshComponent->RegisterComponent();
+
+		if (SourceSection.HasGeometry())
+		{
+			MeshComponent->CreateMeshSection(
+				0,
+				SourceSection.Vertices,
+				SourceSection.Triangles,
+				SourceSection.Normals,
+				SourceSection.UV0,
+				SourceSection.Colors,
+				SourceSection.Tangents,
+				SourceComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+			MeshComponent->SetMaterial(0, SourceComponent->GetMaterial(0));
+		}
+		if (CapSection.HasGeometry())
+		{
+			const int32 SectionIndex = SourceSection.HasGeometry() ? 1 : 0;
+			MeshComponent->CreateMeshSection(
+				SectionIndex,
+				CapSection.Vertices,
+				CapSection.Triangles,
+				CapSection.Normals,
+				CapSection.UV0,
+				CapSection.Colors,
+				CapSection.Tangents,
+				SourceComponent->GetCollisionEnabled() != ECollisionEnabled::NoCollision);
+			MeshComponent->SetMaterial(SectionIndex, GetReconstructionVertexColorMaterial());
+		}
+
+		ResultActor->SetActorLocation(Origin, false, nullptr, ETeleportType::TeleportPhysics);
+		return ResultActor;
+	}
+
+	static void HideStep11SourceComponentForPress(UPrimitiveComponent* Component, const FString& PressId)
+	{
+		if (!Component)
+		{
+			return;
+		}
+		Component->ComponentTags.AddUnique(Step11HiddenSourceTag);
+		Component->ComponentTags.AddUnique(Step11PressTag(PressId));
+		Component->SetVisibility(false, true);
+		Component->SetHiddenInGame(true, true);
+	}
+
+	static void RestoreStep11BooleanResults(UWorld* World, const FString& PressId)
+	{
+		if (!World)
+		{
+			return;
+		}
+
+		if (PressId.IsEmpty())
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Step11: no active press id; skipped press-scoped restore."));
+			return;
+		}
+
+		const FName PressTag = Step11PressTag(PressId);
+		const FString UndoDiagnosticPath = FPaths::ProjectSavedDir() / TEXT("2DDebug") / PressId / TEXT("11_undo_diagnostics.json");
+		TSharedRef<FJsonObject> UndoRoot = MakeShared<FJsonObject>();
+		UndoRoot->SetNumberField(TEXT("diagnostic_version"), 1);
+		UndoRoot->SetStringField(TEXT("press_id"), PressId);
+		UndoRoot->SetStringField(TEXT("active_undo_press_id"), GActiveUndoPressId);
+
+		TArray<AActor*> ActorsToDestroy;
+		TArray<UProceduralMeshComponent*> GeneratedComponents;
+		TArray<UPrimitiveComponent*> HiddenSourceComponents;
+		int32 SkippedOtherPressActorCount = 0;
+		int32 SkippedOtherPressComponentCount = 0;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			if (!Actor)
+			{
+				continue;
+			}
+
+			const bool bCurrentPressActor = Actor->ActorHasTag(PressTag);
+			if (bCurrentPressActor && (
+				Actor->ActorHasTag(Step11BooleanResultTag) ||
+				Actor->ActorHasTag(Step11ActionAttachTag) ||
+				Actor->ActorHasTag(Step11ActionExcavateCutterTag)))
+			{
+				ActorsToDestroy.Add(Actor);
+				continue;
+			}
+			if (!bCurrentPressActor && ActorHasAnyStep11RuntimeTag(Actor))
+			{
+				++SkippedOtherPressActorCount;
+			}
+
+			TArray<UProceduralMeshComponent*> ProceduralComponents;
+			Actor->GetComponents<UProceduralMeshComponent>(ProceduralComponents);
+			for (UProceduralMeshComponent* Component : ProceduralComponents)
+			{
+				if (Component &&
+					Component->ComponentTags.Contains(Step11BooleanResultTag) &&
+					Component->ComponentTags.Contains(PressTag))
+				{
+					GeneratedComponents.Add(Component);
+				}
+				else if (Component && Component->ComponentTags.Contains(Step11BooleanResultTag))
+				{
+					++SkippedOtherPressComponentCount;
+				}
+			}
+
+			TArray<UPrimitiveComponent*> PrimitiveComponents;
+			Actor->GetComponents<UPrimitiveComponent>(PrimitiveComponents);
+			for (UPrimitiveComponent* Component : PrimitiveComponents)
+			{
+				if (Component &&
+					Component->ComponentTags.Contains(Step11HiddenSourceTag) &&
+					Component->ComponentTags.Contains(PressTag))
+				{
+					HiddenSourceComponents.Add(Component);
+				}
+				else if (Component && Component->ComponentTags.Contains(Step11HiddenSourceTag))
+				{
+					++SkippedOtherPressComponentCount;
+				}
+			}
+		}
+
+		for (UProceduralMeshComponent* Component : GeneratedComponents)
+		{
+			if (Component)
+			{
+				Component->DestroyComponent();
+			}
+		}
+		for (AActor* Actor : ActorsToDestroy)
+		{
+			if (Actor)
+			{
+				Actor->Destroy();
+			}
+		}
+		for (UPrimitiveComponent* Component : HiddenSourceComponents)
+		{
+			if (Component)
+			{
+				Component->SetVisibility(true, true);
+				Component->SetHiddenInGame(false, true);
+				Component->ComponentTags.Remove(Step11HiddenSourceTag);
+				Component->ComponentTags.Remove(PressTag);
+			}
+		}
+		UndoRoot->SetNumberField(TEXT("destroyed_actor_count"), ActorsToDestroy.Num());
+		UndoRoot->SetNumberField(TEXT("destroyed_boolean_component_count"), GeneratedComponents.Num());
+		UndoRoot->SetNumberField(TEXT("restored_hidden_source_count"), HiddenSourceComponents.Num());
+		UndoRoot->SetNumberField(TEXT("skipped_other_press_actor_count"), SkippedOtherPressActorCount);
+		UndoRoot->SetNumberField(TEXT("skipped_other_press_component_count"), SkippedOtherPressComponentCount);
+		SaveJsonObject(UndoRoot, UndoDiagnosticPath);
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("Step11: press-scoped restore press=%s restored %d hidden source component(s), removed %d boolean result component(s), destroyed %d current press actor(s), skipped_other_press_actors=%d skipped_other_press_components=%d."),
+			*PressId,
+			HiddenSourceComponents.Num(),
+			GeneratedComponents.Num(),
+			ActorsToDestroy.Num(),
+			SkippedOtherPressActorCount,
+			SkippedOtherPressComponentCount);
+	}
+
+	static void ApplyStep11BooleanOperations(
+		UWorld* World,
+		const TArray<FReconstructedMesh>& Meshes,
+		const FString& PressId,
+		const FString& DiagnosticJsonPath,
+		TSet<FString>& OutAcceptedCutterActorNames)
+	{
+		if (!World)
+		{
+			return;
+		}
+
+		OutAcceptedCutterActorNames.Reset();
+		TSharedRef<FJsonObject> DiagnosticsRoot = MakeShared<FJsonObject>();
+		DiagnosticsRoot->SetNumberField(TEXT("diagnostic_version"), 2);
+		DiagnosticsRoot->SetStringField(TEXT("press_id"), PressId);
+		DiagnosticsRoot->SetStringField(TEXT("active_undo_press_id"), GActiveUndoPressId);
+		DiagnosticsRoot->SetNumberField(TEXT("excavation_cutter_normal_scale"), ExcavationCutterNormalScale);
+		DiagnosticsRoot->SetNumberField(TEXT("snap_tolerance_cm"), Step11BooleanSnapToleranceCm);
+		DiagnosticsRoot->SetNumberField(TEXT("min_renderable_edge_cm"), Step11BooleanMinRenderableEdgeCm);
+
+		TArray<TSharedPtr<FJsonValue>> InputMeshDiagnostics;
+		TArray<TSharedPtr<FJsonValue>> CutterDiagnosticsJson;
+		TArray<TSharedPtr<FJsonValue>> TargetDiagnosticsJson;
+		TArray<TSharedPtr<FJsonValue>> BuildFailureDiagnostics;
+
+		TArray<const FReconstructedMesh*> Cutters;
+		TArray<UE::Geometry::FDynamicMesh3> CutterMeshes;
+		TArray<FBox> CutterBounds;
+		TArray<FStep11MeshDiagnostics> CutterDiagnostics;
+		for (const FReconstructedMesh& Mesh : Meshes)
+		{
+			TSharedRef<FJsonObject> InputObject = MakeShared<FJsonObject>();
+			InputObject->SetStringField(TEXT("actor_name"), Mesh.ActorName);
+			InputObject->SetStringField(TEXT("tag"), Mesh.Tag.ToString());
+			InputObject->SetBoolField(TEXT("is_excavate_cutter"), Mesh.bIsExcavateCutter);
+			InputObject->SetNumberField(TEXT("input_world_vertex_count"), Mesh.VerticesWorld.Num());
+			InputObject->SetNumberField(TEXT("input_triangle_index_count"), Mesh.Triangles.Num());
+			InputObject->SetNumberField(TEXT("input_triangle_count"), Mesh.Triangles.Num() / 3);
+			InputObject->SetArrayField(TEXT("normal"), JsonVector(Mesh.Normal)->AsArray());
+			InputObject->SetObjectField(TEXT("input_bounds"), Step11BoxJson(BuildWorldBounds(Mesh.VerticesWorld)));
+			InputMeshDiagnostics.Add(MakeShared<FJsonValueObject>(InputObject));
+
+			if (!Mesh.bIsExcavateCutter || Mesh.VerticesWorld.Num() < 3 || Mesh.Triangles.Num() < 3)
+			{
+				UE_LOG(
+					LogTemp,
+					Log,
+					TEXT("Step11Diag: reconstruction mesh skipped as cutter actor=%s excavate=%d vertices=%d triangle_indices=%d."),
+					*Mesh.ActorName,
+					Mesh.bIsExcavateCutter ? 1 : 0,
+					Mesh.VerticesWorld.Num(),
+					Mesh.Triangles.Num());
+				continue;
+			}
+
+			UE::Geometry::FDynamicMesh3 CutterMesh;
+			if (!BuildDynamicMeshFromWorldMesh(Mesh.VerticesWorld, Mesh.Triangles, CutterMesh))
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Step11: failed to build cutter dynamic mesh for %s."), *Mesh.ActorName);
+				TSharedRef<FJsonObject> FailureObject = MakeShared<FJsonObject>();
+				FailureObject->SetStringField(TEXT("kind"), TEXT("cutter_build_failed"));
+				FailureObject->SetStringField(TEXT("actor_name"), Mesh.ActorName);
+				FailureObject->SetNumberField(TEXT("input_world_vertex_count"), Mesh.VerticesWorld.Num());
+				FailureObject->SetNumberField(TEXT("input_triangle_index_count"), Mesh.Triangles.Num());
+				BuildFailureDiagnostics.Add(MakeShared<FJsonValueObject>(FailureObject));
+				continue;
+			}
+
+			Cutters.Add(&Mesh);
+			CutterBounds.Add(BuildWorldBounds(Mesh.VerticesWorld));
+			FStep11MeshDiagnostics Diagnostics = AnalyzeStep11DynamicMesh(CutterMesh, Mesh.ActorName, TEXT("excavate_cutter"));
+			CutterDiagnostics.Add(Diagnostics);
+			LogStep11MeshDiagnostics(Diagnostics);
+			CutterDiagnosticsJson.Add(MakeShared<FJsonValueObject>(Step11MeshDiagnosticsJson(Diagnostics)));
+			CutterMeshes.Add(MoveTemp(CutterMesh));
+		}
+
+		DiagnosticsRoot->SetArrayField(TEXT("input_reconstruction_meshes"), InputMeshDiagnostics);
+		DiagnosticsRoot->SetArrayField(TEXT("cutters"), CutterDiagnosticsJson);
+		DiagnosticsRoot->SetArrayField(TEXT("build_failures"), BuildFailureDiagnostics);
+
+		if (Cutters.Num() == 0)
+		{
+			TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+			Summary->SetNumberField(TEXT("excavate_cutter_count"), 0);
+			Summary->SetNumberField(TEXT("updated_static_component_count"), 0);
+			Summary->SetNumberField(TEXT("updated_procedural_component_count"), 0);
+			Summary->SetNumberField(TEXT("created_boolean_result_actor_count"), 0);
+			Summary->SetNumberField(TEXT("failed_boolean_count"), 0);
+			Summary->SetStringField(TEXT("status"), TEXT("no_excavate_cutters"));
+			DiagnosticsRoot->SetObjectField(TEXT("summary"), Summary);
+			DiagnosticsRoot->SetArrayField(TEXT("targets"), TargetDiagnosticsJson);
+			if (!DiagnosticJsonPath.IsEmpty() && SaveJsonObject(DiagnosticsRoot, DiagnosticJsonPath))
+			{
+				UE_LOG(LogTemp, Log, TEXT("Step11Diag: saved diagnostics %s"), *DiagnosticJsonPath);
+			}
+			return;
+		}
+
+		TArray<UProceduralMeshComponent*> ProceduralTargetComponents;
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			if (!Actor || Actor->IsHidden() ||
+				Actor->ActorHasTag(ReconstructedFaceTag) ||
+				ActorIsStep11Cutter(Actor))
+			{
+				continue;
+			}
+
+			TArray<UProceduralMeshComponent*> ProceduralComponents;
+			Actor->GetComponents<UProceduralMeshComponent>(ProceduralComponents);
+			for (UProceduralMeshComponent* Component : ProceduralComponents)
+			{
+				if (!Component || !Component->IsRegistered() || !Component->IsVisible())
+				{
+					continue;
+				}
+				if (Component->ComponentTags.Contains(Step11BooleanResultTag) ||
+					Actor->ActorHasTag(Step11ActionAttachTag))
+				{
+					ProceduralTargetComponents.Add(Component);
+				}
+			}
+		}
+
+		int32 UpdatedStaticComponentCount = 0;
+		int32 UpdatedProceduralComponentCount = 0;
+		int32 CreatedBooleanResultActorCount = 0;
+		int32 FailedBooleanCount = 0;
+		for (UProceduralMeshComponent* Component : ProceduralTargetComponents)
+		{
+			AActor* Actor = Component ? Component->GetOwner() : nullptr;
+			if (!Actor || !Component->IsRegistered() || !Component->IsVisible())
+			{
+				continue;
+			}
+
+			UE::Geometry::FDynamicMesh3 CurrentMesh;
+			if (!BuildDynamicMeshFromProceduralMeshComponent(Component, CurrentMesh))
+			{
+				TSharedRef<FJsonObject> TargetObject = MakeShared<FJsonObject>();
+				TargetObject->SetStringField(TEXT("target_actor"), Actor->GetName());
+				TargetObject->SetStringField(TEXT("target_component"), Component->GetName());
+				TargetObject->SetStringField(TEXT("source_type"), Component->ComponentTags.Contains(Step11BooleanResultTag) ? TEXT("prior_boolean_result") : TEXT("attach_procedural"));
+				TargetObject->SetStringField(TEXT("status"), TEXT("build_dynamic_mesh_failed"));
+				TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+				UE_LOG(
+					LogTemp,
+					Warning,
+					TEXT("Step11Diag: failed to build procedural target mesh actor=%s component=%s."),
+					*Actor->GetName(),
+					*Component->GetName());
+				continue;
+			}
+
+			const FString SourceType = Component->ComponentTags.Contains(Step11BooleanResultTag) ? TEXT("prior_boolean_result") : TEXT("attach_procedural");
+			FStep11MeshDiagnostics InitialDiagnostics = AnalyzeStep11DynamicMesh(
+				CurrentMesh,
+				FString::Printf(TEXT("%s/%s"), *Actor->GetName(), *Component->GetName()),
+				SourceType);
+			LogStep11MeshDiagnostics(InitialDiagnostics);
+			TArray<TSharedPtr<FJsonValue>> OperationDiagnostics;
+			TArray<int8> FinalTriangleSourceMeshById;
+			TSet<FString> TargetAcceptedCutters;
+
+			bool bEmptyResult = false;
+			const bool bModified = ApplyCuttersToDynamicMesh(
+				CurrentMesh,
+				Actor->GetName(),
+				Component->GetName(),
+				SourceType,
+				Cutters,
+				CutterMeshes,
+				CutterBounds,
+				CutterDiagnostics,
+				&OperationDiagnostics,
+				FinalTriangleSourceMeshById,
+				TargetAcceptedCutters,
+				bEmptyResult,
+				FailedBooleanCount);
+
+			TSharedRef<FJsonObject> TargetObject = MakeShared<FJsonObject>();
+			TargetObject->SetStringField(TEXT("target_actor"), Actor->GetName());
+			TargetObject->SetStringField(TEXT("target_component"), Component->GetName());
+			TargetObject->SetStringField(TEXT("source_type"), SourceType);
+			TargetObject->SetObjectField(TEXT("initial"), Step11MeshDiagnosticsJson(InitialDiagnostics));
+			TargetObject->SetBoolField(TEXT("modified"), bModified);
+			TargetObject->SetBoolField(TEXT("empty_result"), bEmptyResult);
+			TargetObject->SetArrayField(TEXT("operations"), OperationDiagnostics);
+			if (!bModified)
+			{
+				TargetObject->SetStringField(TEXT("status"), TEXT("not_modified"));
+				TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+				continue;
+			}
+
+			if (bEmptyResult)
+			{
+				HideStep11SourceComponentForPress(Component, PressId);
+				TargetObject->SetStringField(TEXT("status"), TEXT("target_fully_removed_empty_result"));
+				MergeStep11StringSet(OutAcceptedCutterActorNames, TargetAcceptedCutters);
+				++UpdatedProceduralComponentCount;
+			}
+			else
+			{
+				AActor* ResultActor = CreateBooleanResultActor(
+					World,
+					Component,
+					Actor->GetName(),
+					Component->GetName(),
+					PressId,
+					CurrentMesh,
+					FinalTriangleSourceMeshById);
+				if (ResultActor)
+				{
+					HideStep11SourceComponentForPress(Component, PressId);
+					MergeStep11StringSet(OutAcceptedCutterActorNames, TargetAcceptedCutters);
+					TargetObject->SetStringField(TEXT("status"), TEXT("created_boolean_result_actor"));
+					TargetObject->SetStringField(TEXT("result_actor"), ResultActor->GetName());
+					TargetObject->SetObjectField(
+						TEXT("final"),
+						Step11MeshDiagnosticsJson(AnalyzeStep11DynamicMesh(CurrentMesh, FString::Printf(TEXT("%s/%s final"), *Actor->GetName(), *Component->GetName()), TEXT("procedural_boolean_result"))));
+					++UpdatedProceduralComponentCount;
+					++CreatedBooleanResultActorCount;
+				}
+				else
+				{
+					TargetObject->SetStringField(TEXT("status"), TEXT("failed_to_create_boolean_result_actor"));
+				}
+			}
+			TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+		}
+
+		for (TActorIterator<AActor> It(World); It; ++It)
+		{
+			AActor* Actor = *It;
+			if (!Actor || Actor->IsHidden() ||
+				Actor->ActorHasTag(ReconstructedFaceTag) ||
+				ActorHasAnyStep11RuntimeTag(Actor))
+			{
+				continue;
+			}
+
+			TArray<UStaticMeshComponent*> StaticComponents;
+			Actor->GetComponents<UStaticMeshComponent>(StaticComponents);
+			for (UStaticMeshComponent* Component : StaticComponents)
+			{
+				if (!Component || !Component->IsRegistered() || !Component->IsVisible() || !Component->GetStaticMesh())
+				{
+					continue;
+				}
+
+				UE::Geometry::FDynamicMesh3 CurrentMesh;
+				if (!BuildDynamicMeshFromStaticMeshComponent(Component, CurrentMesh))
+				{
+					TSharedRef<FJsonObject> TargetObject = MakeShared<FJsonObject>();
+					TargetObject->SetStringField(TEXT("target_actor"), Actor->GetName());
+					TargetObject->SetStringField(TEXT("target_component"), Component->GetName());
+					TargetObject->SetStringField(TEXT("source_type"), TEXT("static_mesh"));
+					TargetObject->SetStringField(TEXT("status"), TEXT("build_dynamic_mesh_failed"));
+					TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+					UE_LOG(
+						LogTemp,
+						Warning,
+						TEXT("Step11Diag: failed to build static target mesh actor=%s component=%s."),
+						*Actor->GetName(),
+						*Component->GetName());
+					continue;
+				}
+
+				FStep11MeshDiagnostics InitialDiagnostics = AnalyzeStep11DynamicMesh(
+					CurrentMesh,
+					FString::Printf(TEXT("%s/%s"), *Actor->GetName(), *Component->GetName()),
+					TEXT("static_mesh"));
+				LogStep11MeshDiagnostics(InitialDiagnostics);
+				TArray<TSharedPtr<FJsonValue>> OperationDiagnostics;
+				TArray<int8> FinalTriangleSourceMeshById;
+				TSet<FString> TargetAcceptedCutters;
+
+				bool bEmptyResult = false;
+				const bool bModified = ApplyCuttersToDynamicMesh(
+					CurrentMesh,
+					Actor->GetName(),
+					Component->GetName(),
+					TEXT("static_mesh"),
+					Cutters,
+					CutterMeshes,
+					CutterBounds,
+					CutterDiagnostics,
+					&OperationDiagnostics,
+					FinalTriangleSourceMeshById,
+					TargetAcceptedCutters,
+					bEmptyResult,
+					FailedBooleanCount);
+
+				TSharedRef<FJsonObject> TargetObject = MakeShared<FJsonObject>();
+				TargetObject->SetStringField(TEXT("target_actor"), Actor->GetName());
+				TargetObject->SetStringField(TEXT("target_component"), Component->GetName());
+				TargetObject->SetStringField(TEXT("source_type"), TEXT("static_mesh"));
+				TargetObject->SetObjectField(TEXT("initial"), Step11MeshDiagnosticsJson(InitialDiagnostics));
+				TargetObject->SetBoolField(TEXT("modified"), bModified);
+				TargetObject->SetBoolField(TEXT("empty_result"), bEmptyResult);
+				TargetObject->SetArrayField(TEXT("operations"), OperationDiagnostics);
+				if (!bModified)
+				{
+					TargetObject->SetStringField(TEXT("status"), TEXT("not_modified"));
+					TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+					continue;
+				}
+
+				if (bEmptyResult)
+				{
+					HideStep11SourceComponentForPress(Component, PressId);
+					MergeStep11StringSet(OutAcceptedCutterActorNames, TargetAcceptedCutters);
+					TargetObject->SetStringField(TEXT("status"), TEXT("target_fully_removed_empty_result"));
+					++UpdatedStaticComponentCount;
+				}
+				else
+				{
+					AActor* ResultActor = CreateBooleanResultActor(
+						World,
+						Component,
+						Actor->GetName(),
+						Component->GetName(),
+						PressId,
+						CurrentMesh,
+						FinalTriangleSourceMeshById);
+					if (ResultActor)
+					{
+						HideStep11SourceComponentForPress(Component, PressId);
+						MergeStep11StringSet(OutAcceptedCutterActorNames, TargetAcceptedCutters);
+						TargetObject->SetStringField(TEXT("status"), TEXT("created_boolean_result_actor"));
+						TargetObject->SetStringField(TEXT("result_actor"), ResultActor->GetName());
+						TargetObject->SetObjectField(
+							TEXT("final"),
+							Step11MeshDiagnosticsJson(AnalyzeStep11DynamicMesh(CurrentMesh, FString::Printf(TEXT("%s/%s final"), *Actor->GetName(), *Component->GetName()), TEXT("static_mesh_boolean_result"))));
+						++UpdatedStaticComponentCount;
+						++CreatedBooleanResultActorCount;
+					}
+					else
+					{
+						TargetObject->SetStringField(TEXT("status"), TEXT("failed_to_create_boolean_result_actor"));
+					}
+				}
+				TargetDiagnosticsJson.Add(MakeShared<FJsonValueObject>(TargetObject));
+			}
+		}
+
+		UE_LOG(
+			LogTemp,
+			Log,
+			TEXT("Step11: press=%s applied %d excavate cutter(s), updated %d static mesh component(s), updated %d procedural component(s), created %d boolean result actor(s), failed boolean attempts=%d."),
+			*PressId,
+			Cutters.Num(),
+			UpdatedStaticComponentCount,
+			UpdatedProceduralComponentCount,
+			CreatedBooleanResultActorCount,
+			FailedBooleanCount);
+
+		TSharedRef<FJsonObject> Summary = MakeShared<FJsonObject>();
+		Summary->SetNumberField(TEXT("excavate_cutter_count"), Cutters.Num());
+		Summary->SetNumberField(TEXT("updated_static_component_count"), UpdatedStaticComponentCount);
+		Summary->SetNumberField(TEXT("updated_procedural_component_count"), UpdatedProceduralComponentCount);
+		Summary->SetNumberField(TEXT("created_boolean_result_actor_count"), CreatedBooleanResultActorCount);
+		Summary->SetNumberField(TEXT("failed_boolean_count"), FailedBooleanCount);
+		Summary->SetNumberField(TEXT("target_record_count"), TargetDiagnosticsJson.Num());
+		Summary->SetNumberField(TEXT("accepted_cutter_actor_count"), OutAcceptedCutterActorNames.Num());
+		Summary->SetStringField(TEXT("status"), FailedBooleanCount > 0 ? TEXT("completed_with_boolean_failures") : TEXT("completed"));
+		DiagnosticsRoot->SetObjectField(TEXT("summary"), Summary);
+		DiagnosticsRoot->SetArrayField(TEXT("targets"), TargetDiagnosticsJson);
+		if (!DiagnosticJsonPath.IsEmpty())
+		{
+			if (SaveJsonObject(DiagnosticsRoot, DiagnosticJsonPath))
+			{
+				UE_LOG(LogTemp, Log, TEXT("Step11Diag: saved diagnostics %s"), *DiagnosticJsonPath);
+			}
+			else
+			{
+				UE_LOG(LogTemp, Warning, TEXT("Step11Diag: failed to save diagnostics %s"), *DiagnosticJsonPath);
+			}
+		}
 	}
 
 	static FVector UnrealWorldToObjDebugSpace(const FVector& WorldPosition)
@@ -2607,6 +4469,65 @@ namespace
 		return FaceCount;
 	}
 
+	static int32 AppendProceduralMeshComponentObj(FString& Obj, int32& VertexOffset, UProceduralMeshComponent* Component)
+	{
+		if (!Component || !Component->IsRegistered() || !Component->IsVisible() || !Component->ComponentTags.Contains(Step11BooleanResultTag))
+		{
+			return 0;
+		}
+
+		const FString OwnerName = Component->GetOwner() ? Component->GetOwner()->GetName() : TEXT("BooleanActor");
+		const FTransform& ComponentTransform = Component->GetComponentTransform();
+		int32 FaceCount = 0;
+		for (int32 SectionIndex = 0; SectionIndex < Component->GetNumSections(); ++SectionIndex)
+		{
+			if (!Component->IsMeshSectionVisible(SectionIndex))
+			{
+				continue;
+			}
+
+			const FProcMeshSection* Section = Component->GetProcMeshSection(SectionIndex);
+			if (!Section || Section->ProcVertexBuffer.Num() < 3 || Section->ProcIndexBuffer.Num() < 3)
+			{
+				continue;
+			}
+
+			const int32 BaseVertex = VertexOffset;
+			Obj += FString::Printf(
+				TEXT("\no %s_%s_section_%d\nusemtl %s\n"),
+				*ObjSafeName(OwnerName),
+				*ObjSafeName(Component->GetName()),
+				SectionIndex,
+				SectionIndex == 0 ? TEXT("scene_gray") : TEXT("boolean_cap_gray"));
+
+			for (const FProcMeshVertex& Vertex : Section->ProcVertexBuffer)
+			{
+				const FVector WorldPosition = ComponentTransform.TransformPosition(Vertex.Position);
+				const FVector ObjPosition = UnrealWorldToObjDebugSpace(WorldPosition);
+				Obj += FString::Printf(TEXT("v %.6f %.6f %.6f\n"), ObjPosition.X, ObjPosition.Y, ObjPosition.Z);
+			}
+
+			for (int32 i = 0; i + 2 < Section->ProcIndexBuffer.Num(); i += 3)
+			{
+				const int32 A = Section->ProcIndexBuffer[i];
+				const int32 B = Section->ProcIndexBuffer[i + 1];
+				const int32 C = Section->ProcIndexBuffer[i + 2];
+				if (!Section->ProcVertexBuffer.IsValidIndex(A) ||
+					!Section->ProcVertexBuffer.IsValidIndex(B) ||
+					!Section->ProcVertexBuffer.IsValidIndex(C))
+				{
+					continue;
+				}
+
+				Obj += FString::Printf(TEXT("f %d %d %d\n"), BaseVertex + A + 1, BaseVertex + C + 1, BaseVertex + B + 1);
+				++FaceCount;
+			}
+
+			VertexOffset += Section->ProcVertexBuffer.Num();
+		}
+		return FaceCount;
+	}
+
 	static bool ExportReconstructionSceneObj(
 		UWorld* World,
 		const TArray<FReconstructedMesh>& ReconstructedMeshes,
@@ -2632,12 +4553,23 @@ namespace
 			TEXT("Kd 0.650000 0.650000 0.650000\n")
 			TEXT("Ks 0.000000 0.000000 0.000000\n")
 			TEXT("d 1.000000\n\n")
+			TEXT("newmtl boolean_cap_gray\n")
+			TEXT("Ka 0.700000 0.700000 0.700000\n")
+			TEXT("Kd 0.700000 0.700000 0.700000\n")
+			TEXT("Ks 0.000000 0.000000 0.000000\n")
+			TEXT("d 1.000000\n\n")
 			TEXT("newmtl reconstructed_blue\n")
 			TEXT("Ka 0.000000 0.250000 1.000000\n")
 			TEXT("Kd 0.000000 0.470000 1.000000\n")
 			TEXT("Ke 0.000000 0.050000 0.250000\n")
 			TEXT("Ks 0.000000 0.000000 0.000000\n")
-			TEXT("d 1.000000\n");
+			TEXT("d 1.000000\n\n")
+			TEXT("newmtl reconstructed_cutter_transparent\n")
+			TEXT("Ka 0.000000 0.250000 1.000000\n")
+			TEXT("Kd 0.000000 0.470000 1.000000\n")
+			TEXT("Ke 0.000000 0.050000 0.250000\n")
+			TEXT("Ks 0.000000 0.000000 0.000000\n")
+			TEXT("d 0.250000\n");
 
 		FString Obj;
 		Obj.Reserve(1024 * 1024);
@@ -2649,6 +4581,8 @@ namespace
 		int32 VertexOffset = 0;
 		int32 StaticComponentCount = 0;
 		int32 StaticFaceCount = 0;
+		int32 BooleanComponentCount = 0;
+		int32 BooleanFaceCount = 0;
 		for (TActorIterator<AActor> It(World); It; ++It)
 		{
 			AActor* Actor = *It;
@@ -2670,6 +4604,18 @@ namespace
 					StaticFaceCount += FaceCount;
 				}
 			}
+
+			TArray<UProceduralMeshComponent*> ProceduralComponents;
+			Actor->GetComponents<UProceduralMeshComponent>(ProceduralComponents);
+			for (UProceduralMeshComponent* Component : ProceduralComponents)
+			{
+				const int32 FaceCount = AppendProceduralMeshComponentObj(Obj, VertexOffset, Component);
+				if (FaceCount > 0)
+				{
+					++BooleanComponentCount;
+					BooleanFaceCount += FaceCount;
+				}
+			}
 		}
 
 		int32 ReconstructionFaceCount = 0;
@@ -2679,7 +4625,7 @@ namespace
 				Obj,
 				VertexOffset,
 				MeshData.ActorName,
-				TEXT("reconstructed_blue"),
+				MeshData.bIsExcavateCutter ? TEXT("reconstructed_cutter_transparent") : TEXT("reconstructed_blue"),
 				MeshData.VerticesWorld,
 				MeshData.Triangles);
 		}
@@ -2691,10 +4637,12 @@ namespace
 			UE_LOG(
 				LogTemp,
 				Log,
-				TEXT("FaceReconstruct: exported debug OBJ %s (static components=%d, static faces=%d, reconstruction faces=%d)."),
+				TEXT("FaceReconstruct: exported debug OBJ %s (static components=%d, static faces=%d, boolean components=%d, boolean faces=%d, reconstruction faces=%d)."),
 				*ObjPath,
 				StaticComponentCount,
 				StaticFaceCount,
+				BooleanComponentCount,
+				BooleanFaceCount,
 				ReconstructionFaceCount);
 			return true;
 		}
@@ -2703,9 +4651,13 @@ namespace
 		return false;
 	}
 
-	static void SpawnMeshesOnGameThread(TWeakObjectPtr<UWorld> WorldPtr, TArray<FReconstructedMesh> Meshes, FString DebugObjPath = FString())
+	static void SpawnMeshesOnGameThread(
+		TWeakObjectPtr<UWorld> WorldPtr,
+		TArray<FReconstructedMesh> Meshes,
+		FString DebugObjPath = FString(),
+		FString PressId = FString())
 	{
-		AsyncTask(ENamedThreads::GameThread, [WorldPtr, Meshes = MoveTemp(Meshes), DebugObjPath = MoveTemp(DebugObjPath)]() mutable
+		AsyncTask(ENamedThreads::GameThread, [WorldPtr, Meshes = MoveTemp(Meshes), DebugObjPath = MoveTemp(DebugObjPath), PressId = MoveTemp(PressId)]() mutable
 		{
 			UWorld* World = WorldPtr.Get();
 			if (!World)
@@ -2714,22 +4666,13 @@ namespace
 				return;
 			}
 
-			TArray<AActor*> Existing;
-			for (TActorIterator<AActor> It(World); It; ++It)
-			{
-				AActor* Actor = *It;
-				if (Actor && (Actor->ActorHasTag(ReconstructedFaceTag) || Actor->ActorHasTag(ReconstructedSolidTag)))
-				{
-					Existing.Add(Actor);
-				}
-			}
-			for (AActor* Actor : Existing)
-			{
-				if (Actor)
-				{
-					Actor->Destroy();
-				}
-			}
+			GActiveUndoPressId = PressId;
+			const FName PressTag = Step11PressTag(PressId);
+			TSet<FString> AcceptedCutterActorNames;
+			const FString Step11DiagnosticJsonPath = DebugObjPath.IsEmpty()
+				? FString()
+				: FPaths::GetPath(DebugObjPath) / TEXT("11_boolean_diagnostics.json");
+			ApplyStep11BooleanOperations(World, Meshes, PressId, Step11DiagnosticJsonPath, AcceptedCutterActorNames);
 
 			UMaterialInterface* VertexColorMaterial = GetReconstructionVertexColorMaterial();
 			for (const FReconstructedMesh& MeshData : Meshes)
@@ -2756,6 +4699,8 @@ namespace
 				}
 
 				Actor->Tags.AddUnique(MeshData.Tag);
+				Actor->Tags.AddUnique(PressTag);
+				Actor->Tags.AddUnique(MeshData.bIsExcavateCutter ? Step11ActionExcavateCutterTag : Step11ActionAttachTag);
 #if WITH_EDITOR
 				Actor->SetActorLabel(MeshData.ActorName);
 #endif
@@ -2765,6 +4710,8 @@ namespace
 				MeshComponent->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 				MeshComponent->bUseAsyncCooking = false;
 				MeshComponent->SetCastShadow(false);
+				MeshComponent->ComponentTags.AddUnique(PressTag);
+				MeshComponent->ComponentTags.AddUnique(MeshData.bIsExcavateCutter ? Step11ActionExcavateCutterTag : Step11ActionAttachTag);
 				Actor->SetRootComponent(MeshComponent);
 				Actor->AddInstanceComponent(MeshComponent);
 				MeshComponent->RegisterComponent();
@@ -2772,7 +4719,7 @@ namespace
 				{
 					MeshComponent->SetWorldLocation(Origin);
 				}
-				MeshComponent->SetMaterial(0, VertexColorMaterial);
+				MeshComponent->SetMaterial(0, MeshData.bIsExcavateCutter ? CreateCutterMaterial(MeshComponent) : VertexColorMaterial);
 
 				TArray<FVector> LocalVertices;
 				LocalVertices.Reserve(MeshData.VerticesWorld.Num());
@@ -2794,6 +4741,14 @@ namespace
 				TArray<int32> DrawTriangles;
 				AppendDoubleSidedTriangles(MeshData.Triangles, DrawTriangles);
 				MeshComponent->CreateMeshSection(0, LocalVertices, DrawTriangles, Normals, UV0, Colors, Tangents, false);
+
+				if (MeshData.bIsExcavateCutter && AcceptedCutterActorNames.Contains(MeshData.ActorName))
+				{
+					Actor->SetActorHiddenInGame(true);
+					MeshComponent->SetVisibility(false, true);
+					MeshComponent->SetHiddenInGame(true, true);
+					UE_LOG(LogTemp, Log, TEXT("Step11Diag: cutter hidden after accepted boolean actor=%s press=%s."), *MeshData.ActorName, *PressId);
+				}
 			}
 
 			if (!DebugObjPath.IsEmpty())
@@ -2801,7 +4756,7 @@ namespace
 				ExportReconstructionSceneObj(World, Meshes, DebugObjPath);
 			}
 
-			UE_LOG(LogTemp, Log, TEXT("FaceReconstruct: spawned %d runtime reconstruction actor(s)."), Meshes.Num());
+			UE_LOG(LogTemp, Log, TEXT("FaceReconstruct: press=%s spawned %d runtime reconstruction actor(s)."), *PressId, Meshes.Num());
 		});
 	}
 
@@ -2825,6 +4780,7 @@ namespace
 
 void FFromLZFaceReconstructor::ProcessPress(const FString& PressDir, const FString& ActionPressDir, TWeakObjectPtr<UWorld> World)
 {
+	const FString PressId = FPaths::GetCleanFilename(PressDir);
 	TArray<FString> ComponentNames;
 	IFileManager::Get().IterateDirectory(*PressDir, [&ComponentNames](const TCHAR* InPath, bool bIsDir) -> bool
 	{
@@ -2842,7 +4798,7 @@ void FFromLZFaceReconstructor::ProcessPress(const FString& PressDir, const FStri
 
 	if (ComponentNames.Num() == 0)
 	{
-		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>());
+		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>(), FString(), PressId);
 		UE_LOG(LogTemp, Log, TEXT("FaceReconstruct: no component folders found in %s"), *PressDir);
 		return;
 	}
@@ -2851,25 +4807,25 @@ void FFromLZFaceReconstructor::ProcessPress(const FString& PressDir, const FStri
 	if (!LoadCaptureRef(PressDir, Inputs))
 	{
 		SaveCommonFailureForComponents(ComponentNames, PressDir, TEXT("Failed to read capture_ref.json or resolve capture/faces paths"));
-		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>());
+		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>(), FString(), PressId);
 		return;
 	}
 	if (!DecodePngToRGBA(Inputs.FacesPngPath, Inputs.FacesRGBA, Inputs.FacesWidth, Inputs.FacesHeight))
 	{
 		SaveCommonFailureForComponents(ComponentNames, PressDir, FString::Printf(TEXT("Failed to decode faces png: %s"), *Inputs.FacesPngPath));
-		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>());
+		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>(), FString(), PressId);
 		return;
 	}
 	if (!LoadFacesJson(Inputs.FacesJsonPath, Inputs.Faces))
 	{
 		SaveCommonFailureForComponents(ComponentNames, PressDir, FString::Printf(TEXT("Failed to read faces json: %s"), *Inputs.FacesJsonPath));
-		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>());
+		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>(), FString(), PressId);
 		return;
 	}
 	if (!LoadCameraJson(Inputs.CaptureJsonPath, Inputs.Camera))
 	{
 		SaveCommonFailureForComponents(ComponentNames, PressDir, FString::Printf(TEXT("Failed to read capture camera json: %s"), *Inputs.CaptureJsonPath));
-		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>());
+		SpawnMeshesOnGameThread(World, TArray<FReconstructedMesh>(), FString(), PressId);
 		return;
 	}
 	BuildFaceLookups(Inputs);
@@ -2899,11 +4855,32 @@ void FFromLZFaceReconstructor::ProcessPress(const FString& PressDir, const FStri
 			SolidMesh.VerticesWorld = Result.Solid.MeshVerticesWorld;
 			SolidMesh.Triangles = Result.Solid.MeshTriangles;
 			SolidMesh.Normal = Result.Solid.MeshNormal;
-			SolidMesh.Color = ReconstructedDebugBlue;
+			SolidMesh.PressId = PressId;
+			SolidMesh.bIsExcavateCutter = Result.Solid.Action.Equals(TEXT("excavate"), ESearchCase::IgnoreCase);
+			if (SolidMesh.bIsExcavateCutter)
+			{
+				ScaleVerticesAlongAxis(SolidMesh.VerticesWorld, SolidMesh.Normal, ExcavationCutterNormalScale);
+			}
+			SolidMesh.Color = SolidMesh.bIsExcavateCutter ? FColor(0, 120, 255, 80) : ReconstructedDebugBlue;
 			MeshesToSpawn.Add(MoveTemp(SolidMesh));
 		}
 	}
 
-	SpawnMeshesOnGameThread(World, MoveTemp(MeshesToSpawn), PressDir / TEXT("10_reconstruction_scene.obj"));
+	SpawnMeshesOnGameThread(World, MoveTemp(MeshesToSpawn), PressDir / TEXT("10_reconstruction_scene.obj"), PressId);
 	UE_LOG(LogTemp, Log, TEXT("FaceReconstruct: processed %d component(s) for %s."), ComponentNames.Num(), *PressDir);
+}
+
+void FFromLZFaceReconstructor::RestoreStep11RuntimeBooleans(TWeakObjectPtr<UWorld> World)
+{
+	AsyncTask(ENamedThreads::GameThread, [World]()
+	{
+		UWorld* WorldPtr = World.Get();
+		if (!WorldPtr)
+		{
+			UE_LOG(LogTemp, Warning, TEXT("Step11: world is no longer valid; skipped restore."));
+			return;
+		}
+
+		RestoreStep11BooleanResults(WorldPtr, GActiveUndoPressId);
+	});
 }
