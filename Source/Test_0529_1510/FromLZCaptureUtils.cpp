@@ -28,6 +28,8 @@
 #include "UObject/FieldIterator.h"
 #include "UObject/UnrealType.h"
 
+static constexpr double FromLZCaptureOrthoWidth = 1536.0;
+
 // ===================================================================
 // Normal-based planar face segmentation (Enter-key capture).
 // Groups foreground pixels whose world normals are continuous and whose depth
@@ -111,6 +113,7 @@ namespace FromLZFaces
 static void SaveNormalFaces(
 	const TArray<float>& Depth, const TArray<FVector3f>& Normal,
 	int32 W, int32 H, const UCameraComponent* Camera,
+	bool bCaptureOrthographic, double CaptureOrthoWidth,
 	const FString& FacesPngPath, const FString& FacesJsonPath)
 {
 	using namespace FromLZFaces;
@@ -228,8 +231,8 @@ static void SaveNormalFaces(
 	const FVector Up = CamT.GetUnitAxis(EAxis::Z);
 	const float TanX = FMath::Tan(FMath::DegreesToRadians(Camera->FieldOfView * 0.5f));
 	const float TanY = TanX * (static_cast<float>(H) / static_cast<float>(W));
-	const bool bOrtho = Camera->ProjectionMode == ECameraProjectionMode::Orthographic;
-	const double OrthoW = Camera->OrthoWidth;
+	const bool bOrtho = bCaptureOrthographic;
+	const double OrthoW = CaptureOrthoWidth;
 
 	auto CamRayDir = [&](double px, double py) -> FVector
 	{
@@ -237,13 +240,17 @@ static void SaveNormalFaces(
 		const double ndcY = 1.0 - 2.0 * ((py + 0.5) / H);
 		return Fwd + Rgt * (ndcX * TanX) + Up * (ndcY * TanY); // forward coeff == 1
 	};
-	auto Unproject = [&](int32 px, int32 py, float depth) -> FVector
+	auto OrthoRayOrigin = [&](double px, double py) -> FVector
 	{
 		const double ndcX = 2.0 * ((px + 0.5) / W) - 1.0;
 		const double ndcY = 1.0 - 2.0 * ((py + 0.5) / H);
+		return Loc + Rgt * (ndcX * OrthoW * 0.5) + Up * (ndcY * OrthoW * 0.5 * (static_cast<double>(H) / W));
+	};
+	auto Unproject = [&](int32 px, int32 py, float depth) -> FVector
+	{
 		if (bOrtho)
 		{
-			return Loc + Fwd * depth + Rgt * (ndcX * OrthoW * 0.5) + Up * (ndcY * OrthoW * 0.5 * (static_cast<double>(H) / W));
+			return OrthoRayOrigin(px, py) + Fwd * depth;
 		}
 		// SceneDepth treated as planar (view-space Z); forward coeff of the ray is 1.
 		return Loc + CamRayDir(px, py) * depth;
@@ -342,13 +349,14 @@ static void SaveNormalFaces(
 		Corners3D.Reserve(Corners2D.Num());
 		for (const FVector2D& C2 : Corners2D)
 		{
-			const FVector Dir = CamRayDir(C2.X, C2.Y).GetSafeNormal();
+			const FVector RayOrigin = bOrtho ? OrthoRayOrigin(C2.X, C2.Y) : Loc;
+			const FVector Dir = bOrtho ? Fwd : CamRayDir(C2.X, C2.Y).GetSafeNormal();
 			const double Denom = FVector::DotProduct(Dir, PlaneN);
 			FVector Hit = PlanePt;
 			if (FMath::Abs(Denom) > 1e-5)
 			{
-				const double T = FVector::DotProduct(PlanePt - Loc, PlaneN) / Denom;
-				Hit = Loc + Dir * T;
+				const double T = FVector::DotProduct(PlanePt - RayOrigin, PlaneN) / Denom;
+				Hit = RayOrigin + Dir * T;
 			}
 			Corners3D.Add(Hit);
 		}
@@ -438,7 +446,9 @@ static bool CaptureLineArtPng(const APawn* Pawn, const UCameraComponent* Camera,
 	SCC->bCaptureOnMovement = false;
 	SCC->bAlwaysPersistRenderingState = true;
 	SCC->SetWorldTransform(Camera->GetComponentTransform());
+	SCC->ProjectionType = ECameraProjectionMode::Orthographic;
 	SCC->FOVAngle = Camera->FieldOfView;
+	SCC->OrthoWidth = FromLZCaptureOrthoWidth;
 	SCC->RegisterComponentWithWorld(World);
 
 	// Restrict the capture to actors whose name starts with "Cube" so that the
@@ -615,7 +625,10 @@ static bool CaptureLineArtPng(const APawn* Pawn, const UCameraComponent* Camera,
 		if (CaptureDepthNormal(FaceDepth, FaceNormal))
 		{
 			const FString FacesBase = FPaths::Combine(FPaths::GetPath(OutputPath), FPaths::GetBaseFilename(OutputPath));
-			SaveNormalFaces(FaceDepth, FaceNormal, Size.X, Size.Y, Camera, FacesBase + TEXT("_faces.png"), FacesBase + TEXT("_faces.json"));
+			SaveNormalFaces(
+				FaceDepth, FaceNormal, Size.X, Size.Y, Camera,
+				/*bCaptureOrthographic*/ true, FromLZCaptureOrthoWidth,
+				FacesBase + TEXT("_faces.png"), FacesBase + TEXT("_faces.json"));
 		}
 		else
 		{
@@ -675,8 +688,8 @@ bool FFromLZCaptureUtils::CaptureFromPawn(const APawn* Pawn)
 	ViewObject->SetNumberField(TEXT("fov"), CameraComponent->FieldOfView);
 	ViewObject->SetNumberField(TEXT("aspect_ratio"), CameraComponent->AspectRatio);
 	ViewObject->SetBoolField(TEXT("constrain_aspect_ratio"), CameraComponent->bConstrainAspectRatio);
-	ViewObject->SetStringField(TEXT("projection_mode"), StaticEnum<ECameraProjectionMode::Type>()->GetValueAsString(CameraComponent->ProjectionMode));
-	ViewObject->SetNumberField(TEXT("ortho_width"), CameraComponent->OrthoWidth);
+	ViewObject->SetStringField(TEXT("projection_mode"), StaticEnum<ECameraProjectionMode::Type>()->GetValueAsString(ECameraProjectionMode::Orthographic));
+	ViewObject->SetNumberField(TEXT("ortho_width"), FromLZCaptureOrthoWidth);
 	ViewObject->SetNumberField(TEXT("near_clip_plane"), CameraComponent->OrthoNearClipPlane);
 	ViewObject->SetNumberField(TEXT("far_clip_plane"), CameraComponent->OrthoFarClipPlane);
 	RootObject->SetObjectField(TEXT("camera_view"), ViewObject);

@@ -1,7 +1,7 @@
 {
-	"capture_timestamp": "20260601_155609",
-	"json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260601_155609.json",
-	"png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260601_155609.png",
+	"capture_timestamp": "20260602_112028",
+	"json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260602_112028.json",
+	"png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260602_112028.png",
 	"pawn":
 	{
 		"object_name": "FromLZCameraPawn_0",
@@ -511,7 +511,7 @@
 			"ActorGuid":
 			{
 				"cpp_type": "FGuid",
-				"value_text": "7A1B6D394C62FC085B01E8B9E45590A2"
+				"value_text": "49021CC44C104F57524DD69CABFD7598"
 			},
 			"ActorInstanceGuid":
 			{
@@ -732,11 +732,11 @@
 	},
 	"pawn_transform":
 	{
-		"location_x": 39.051369862574987,
-		"location_y": 279.03674809143058,
-		"location_z": 42.359791130790711,
+		"location_x": 15.803867751522043,
+		"location_y": 234.43052159172862,
+		"location_z": 258.73209858347707,
 		"pitch": 0,
-		"yaw": 90.421349000000006,
+		"yaw": 85.763786999999937,
 		"roll": 0,
 		"scale_x": 1,
 		"scale_y": 1,
@@ -1142,12 +1142,12 @@
 	},
 	"camera_component_transform":
 	{
-		"location_x": 111.93000342252544,
-		"location_y": -877.78086739306332,
-		"location_z": 352.94264525381556,
-		"pitch": -14.999999999999986,
-		"yaw": 93.604826677404873,
-		"roll": -3.2927525022109579e-15,
+		"location_x": -148.27549503487637,
+		"location_y": -913.00847610375081,
+		"location_z": 569.31495270650203,
+		"pitch": -15.000000000000009,
+		"yaw": 81.862092381834529,
+		"roll": 0,
 		"scale_x": 1,
 		"scale_y": 1,
 		"scale_z": 1
@@ -1286,7 +1286,7 @@
 			"RelativeRotation":
 			{
 				"cpp_type": "FRotator",
-				"value_text": "(Pitch=-15.000000,Yaw=3.183478,Roll=-0.000000)"
+				"value_text": "(Pitch=-15.000000,Yaw=-3.901695,Roll=-0.000000)"
 			},
 			"RelativeScale3D":
 			{
@@ -1502,12 +1502,12 @@
 	},
 	"camera_boom_transform":
 	{
-		"location_x": 39.051369862574987,
-		"location_y": 279.03674809143058,
-		"location_z": 42.359791130790711,
-		"pitch": -14.999999999999998,
-		"yaw": 93.604826677404915,
-		"roll": -1.6463762511054789e-15,
+		"location_x": 15.803867751522043,
+		"location_y": 234.43052159172862,
+		"location_z": 258.73209858347707,
+		"pitch": -15.000000000000002,
+		"yaw": 81.862092381834543,
+		"roll": 0,
 		"scale_x": 1,
 		"scale_y": 1,
 		"scale_z": 1
@@ -1517,7 +1517,7 @@
 		"fov": 90,
 		"aspect_ratio": 1.7777780294418335,
 		"constrain_aspect_ratio": false,
-		"projection_mode": "ECameraProjectionMode::Perspective",
+		"projection_mode": "ECameraProjectionMode::Orthographic",
 		"ortho_width": 1536,
 		"near_clip_plane": -768,
 		"far_clip_plane": 2097152

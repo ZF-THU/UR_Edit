@@ -2839,31 +2839,129 @@ namespace FromLZImageOps
 		return bIn;
 	}
 
+	static constexpr double InteriorGreenMinInsideLengthPx = 50.0;
+
+	struct FInteriorGreenStats
+	{
+		int32 StrokeId = -1;
+		int32 InsidePoints = 0;
+		int32 TotalPoints = 0;
+		double InsideRatio = 0.0;
+		double InsideLength = 0.0;
+		double StrokeLength = 0.0;
+	};
+
+	static double StrokeArcLength(const FColoredStroke& Stroke)
+	{
+		if (Stroke.bHasMetrics)
+		{
+			return Stroke.Arc;
+		}
+
+		double Arc = 0.0;
+		const FStroke& Points = Stroke.Points;
+		for (int32 k = 1; k < Points.Num(); ++k)
+		{
+			Arc += (Points[k] - Points[k - 1]).Size();
+		}
+		return Arc;
+	}
+
+	static FInteriorGreenStats MeasureInteriorGreen(const FStroke& CapPolygon, const TArray<FColoredStroke>& Strokes, int32 StrokeId)
+	{
+		FInteriorGreenStats Stats;
+		Stats.StrokeId = StrokeId;
+		if (!Strokes.IsValidIndex(StrokeId))
+		{
+			return Stats;
+		}
+
+		const FColoredStroke& Stroke = Strokes[StrokeId];
+		const FStroke& Points = Stroke.Points;
+		Stats.TotalPoints = Points.Num();
+		Stats.StrokeLength = StrokeArcLength(Stroke);
+		if (Points.Num() == 0)
+		{
+			return Stats;
+		}
+
+		bool bPrevInside = PointInPolygon(CapPolygon, Points[0]);
+		if (bPrevInside)
+		{
+			++Stats.InsidePoints;
+		}
+
+		for (int32 k = 1; k < Points.Num(); ++k)
+		{
+			const bool bInside = PointInPolygon(CapPolygon, Points[k]);
+			if (bInside)
+			{
+				++Stats.InsidePoints;
+			}
+
+			if (bPrevInside && bInside)
+			{
+				Stats.InsideLength += (Points[k] - Points[k - 1]).Size();
+			}
+			bPrevInside = bInside;
+		}
+
+		Stats.InsideRatio = (Stats.TotalPoints > 0)
+			? double(Stats.InsidePoints) / double(Stats.TotalPoints)
+			: 0.0;
+		return Stats;
+	}
+
+	static bool PassesInteriorGreenThresholds(const FInteriorGreenStats& Stats)
+	{
+		return Stats.InsideLength >= InteriorGreenMinInsideLengthPx;
+	}
+
 	// Pick the longest green among GreenCandidates as the extrusion side and translate-copy
 	// the cap along it (away from the cap centre).
 	static void ApplyGreenSideForCap(const TArray<FColoredStroke>& Strokes, const TArray<int32>& GreenCandidates, FCapExtrusionResult& Out)
 	{
+		// Cap centre, used to orient every green chord away from the cap.
+		FVector2D CapCenter = FVector2D::ZeroVector;
+		{
+			const TArray<FVector2D>& Ref = (Out.CapNodes.Num() > 0) ? Out.CapNodes : Out.CapPolygon;
+			for (const FVector2D& P : Ref) { CapCenter += P; }
+			if (Ref.Num() > 0) { CapCenter /= double(Ref.Num()); }
+		}
+
+		Out.SideCandidateVectors.Reset();
+		Out.SideCandidateStarts.Reset();
+		Out.SideCandidateEnds.Reset();
+
 		int32 BestGreen = -1;
 		double BestArc = -1.0;
 		for (int32 g : GreenCandidates)
 		{
+			const FStroke& P = Strokes[g].Points;
+			if (P.Num() < 2) { continue; }
 			double Arc = Strokes[g].Arc;
 			if (!Strokes[g].bHasMetrics)
 			{
 				Arc = 0.0;
-				const FStroke& P = Strokes[g].Points;
 				for (int32 k = 1; k < P.Num(); ++k) { Arc += (P[k] - P[k - 1]).Size(); }
 			}
+
+			// Record this connected green's chord (oriented away from the cap centre)
+			// so step 10 can test the face normal against every green, not just the longest.
+			const double DistToStart = FVector2D::DistSquared(P[0], CapCenter);
+			const double DistToEnd = FVector2D::DistSquared(P.Last(), CapCenter);
+			const FVector2D Start = (DistToStart <= DistToEnd) ? P[0] : P.Last();
+			const FVector2D End = (DistToStart <= DistToEnd) ? P.Last() : P[0];
+			Out.SideCandidateStarts.Add(Start);
+			Out.SideCandidateEnds.Add(End);
+			Out.SideCandidateVectors.Add(End - Start);
+
 			if (Arc > BestArc) { BestArc = Arc; BestGreen = g; }
 		}
 		if (BestGreen >= 0 && Strokes[BestGreen].Points.Num() >= 2)
 		{
 			const FStroke& GP = Strokes[BestGreen].Points;
 			Out.SideStrokeId = BestGreen;
-			FVector2D CapCenter = FVector2D::ZeroVector;
-			const TArray<FVector2D>& Ref = (Out.CapNodes.Num() > 0) ? Out.CapNodes : Out.CapPolygon;
-			for (const FVector2D& P : Ref) { CapCenter += P; }
-			if (Ref.Num() > 0) { CapCenter /= double(Ref.Num()); }
 			const double DistToStart = FVector2D::DistSquared(GP[0], CapCenter);
 			const double DistToEnd = FVector2D::DistSquared(GP.Last(), CapCenter);
 			Out.SideVector = (DistToStart <= DistToEnd) ? (GP.Last() - GP[0]) : (GP[0] - GP.Last());
@@ -2994,26 +3092,51 @@ namespace FromLZImageOps
 			ApplyGreenSideForCap(Strokes, LocalGreen.Num() > 0 ? LocalGreen : GreenIdx, R);
 
 			SaveCapExtrusionPng(Strokes, R, Width, Height, CompDir / TEXT("09_cap_extrusion.png"));
-			SaveCapExtrusionJson(R, CompDir / TEXT("09_cap_extrusion.json"));
 
-			// Interior-green test: any non-side green vertex inside the cap polygon -> excavate.
-			// (The chosen side stroke is the extrusion direction, so it is excluded.)
+			// Interior-green test: any green stroke with at least 50px of accumulated
+			// inside length within the cap polygon means excavate.
 			bool bInteriorGreen = false;
+			FInteriorGreenStats BestInterior;
 			for (int32 g : GreenIdx)
 			{
-				if (g == R.SideStrokeId) { continue; }
-				for (const FVector2D& Pt : Strokes[g].Points)
+				const FInteriorGreenStats Stats = MeasureInteriorGreen(R.CapPolygon, Strokes, g);
+				if (!PassesInteriorGreenThresholds(Stats))
 				{
-					if (PointInPolygon(R.CapPolygon, Pt)) { bInteriorGreen = true; break; }
+					continue;
 				}
-				if (bInteriorGreen) { break; }
+				if (!bInteriorGreen || Stats.InsideLength > BestInterior.InsideLength)
+				{
+					bInteriorGreen = true;
+					BestInterior = Stats;
+				}
 			}
 			R.bHasInteriorGreen = bInteriorGreen;
+			if (bInteriorGreen)
+			{
+				R.InteriorGreenStrokeId = BestInterior.StrokeId;
+				R.InteriorGreenInsidePoints = BestInterior.InsidePoints;
+				R.InteriorGreenTotalPoints = BestInterior.TotalPoints;
+				R.InteriorGreenInsideRatio = BestInterior.InsideRatio;
+				R.InteriorGreenInsideLength = BestInterior.InsideLength;
+				R.InteriorGreenStrokeLength = BestInterior.StrokeLength;
+			}
+			SaveCapExtrusionJson(R, CompDir / TEXT("09_cap_extrusion.json"));
 
 			const FString ActionCompDir = ActionPressDir / FString::Printf(TEXT("Component_%02d"), i + 1);
 			IFileManager::Get().MakeDirectory(*ActionCompDir, /*Tree*/ true);
-			const FString ActionJson = FString::Printf(TEXT("{\n  \"action\": \"%s\"\n}\n"),
-				bInteriorGreen ? TEXT("excavate") : TEXT("attach"));
+			const FString ActionJson = FString::Printf(
+				TEXT("{\n")
+				TEXT("  \"action\": \"%s\",\n")
+				TEXT("  \"has_interior_green\": %s,\n")
+				TEXT("  \"interior_green_stroke_id\": %d,\n")
+				TEXT("  \"interior_green_inside_length\": %.3f,\n")
+				TEXT("  \"interior_green_min_inside_length\": %.3f\n")
+				TEXT("}\n"),
+				bInteriorGreen ? TEXT("excavate") : TEXT("attach"),
+				bInteriorGreen ? TEXT("true") : TEXT("false"),
+				R.InteriorGreenStrokeId,
+				R.InteriorGreenInsideLength,
+				InteriorGreenMinInsideLengthPx);
 			FFileHelper::SaveStringToFile(ActionJson, *(ActionCompDir / TEXT("Action.json")));
 
 			OutResults[i] = R;
@@ -3096,6 +3219,32 @@ namespace FromLZImageOps
 		Json += FString::Printf(TEXT("  \"used_black\": %s,\n"), Res.bUsedBlack ? TEXT("true") : TEXT("false"));
 		Json += FString::Printf(TEXT("  \"side_stroke_id\": %d,\n"), Res.SideStrokeId);
 		Json += FString::Printf(TEXT("  \"side_vector\": [%.3f, %.3f],\n"), Res.SideVector.X, Res.SideVector.Y);
+		Json += FString::Printf(TEXT("  \"has_interior_green\": %s,\n"), Res.bHasInteriorGreen ? TEXT("true") : TEXT("false"));
+		Json += FString::Printf(TEXT("  \"interior_green_stroke_id\": %d,\n"), Res.InteriorGreenStrokeId);
+		Json += FString::Printf(TEXT("  \"interior_green_inside_points\": %d,\n"), Res.InteriorGreenInsidePoints);
+		Json += FString::Printf(TEXT("  \"interior_green_total_points\": %d,\n"), Res.InteriorGreenTotalPoints);
+		Json += FString::Printf(TEXT("  \"interior_green_inside_ratio\": %.6f,\n"), Res.InteriorGreenInsideRatio);
+		Json += FString::Printf(TEXT("  \"interior_green_inside_length\": %.3f,\n"), Res.InteriorGreenInsideLength);
+		Json += FString::Printf(TEXT("  \"interior_green_stroke_length\": %.3f,\n"), Res.InteriorGreenStrokeLength);
+		Json += FString::Printf(TEXT("  \"interior_green_min_inside_length\": %.3f,\n"), InteriorGreenMinInsideLengthPx);
+
+		// All green strokes connected to this cap (chord vectors + endpoint segments).
+		Json += TEXT("  \"side_vectors\": [");
+		for (int32 i = 0; i < Res.SideCandidateVectors.Num(); ++i)
+		{
+			Json += FString::Printf(TEXT("%s[%.3f, %.3f]"), (i == 0 ? TEXT("") : TEXT(", ")),
+				Res.SideCandidateVectors[i].X, Res.SideCandidateVectors[i].Y);
+		}
+		Json += TEXT("],\n");
+
+		Json += TEXT("  \"side_segments\": [");
+		for (int32 i = 0; i < Res.SideCandidateStarts.Num(); ++i)
+		{
+			Json += FString::Printf(TEXT("%s[[%.2f, %.2f], [%.2f, %.2f]]"), (i == 0 ? TEXT("") : TEXT(", ")),
+				Res.SideCandidateStarts[i].X, Res.SideCandidateStarts[i].Y,
+				Res.SideCandidateEnds[i].X, Res.SideCandidateEnds[i].Y);
+		}
+		Json += TEXT("],\n");
 
 		Json += TEXT("  \"cap_stroke_ids\": [");
 		for (int32 i = 0; i < Res.CapStrokeIds.Num(); ++i)

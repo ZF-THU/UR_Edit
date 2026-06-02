@@ -1,3 +1,7 @@
 {
-  "action": "attach"
+  "action": "attach",
+  "has_interior_green": false,
+  "interior_green_stroke_id": -1,
+  "interior_green_inside_length": 0.000,
+  "interior_green_min_inside_length": 50.000
 }

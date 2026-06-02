@@ -8,6 +8,53 @@
 #include "Misc/Paths.h"
 #include "Modules/ModuleManager.h"
 
+namespace
+{
+	// Center-aligned crop/pad of an RGBA buffer to exactly (DstW x DstH). The image
+	// center is preserved: an axis larger than the target is cropped equally on both
+	// sides, an axis smaller is padded with white. No scaling is performed.
+	void CenterFitRGBA(
+		const TArray<uint8>& Src, int32 SrcW, int32 SrcH,
+		int32 DstW, int32 DstH, TArray<uint8>& Out)
+	{
+		const int32 DstN = DstW * DstH;
+		Out.SetNumUninitialized(DstN * 4);
+		for (int32 i = 0; i < DstN; ++i)
+		{
+			Out[i * 4 + 0] = 255;
+			Out[i * 4 + 1] = 255;
+			Out[i * 4 + 2] = 255;
+			Out[i * 4 + 3] = 255;
+		}
+
+		// Source pixel that maps to output (0,0); centers coincide.
+		const int32 OffX = (SrcW - DstW) / 2; // >0 -> crop, <0 -> pad
+		const int32 OffY = (SrcH - DstH) / 2;
+		for (int32 oy = 0; oy < DstH; ++oy)
+		{
+			const int32 sy = oy + OffY;
+			if (sy < 0 || sy >= SrcH)
+			{
+				continue;
+			}
+			for (int32 ox = 0; ox < DstW; ++ox)
+			{
+				const int32 sx = ox + OffX;
+				if (sx < 0 || sx >= SrcW)
+				{
+					continue;
+				}
+				const int32 si = (sy * SrcW + sx) * 4;
+				const int32 di = (oy * DstW + ox) * 4;
+				Out[di + 0] = Src[si + 0];
+				Out[di + 1] = Src[si + 1];
+				Out[di + 2] = Src[si + 2];
+				Out[di + 3] = Src[si + 3];
+			}
+		}
+	}
+}
+
 void FFromLZSketchProcessor::ProcessLatestSketch(UWorld* World)
 {
 	const FString SketchDir = FPaths::ProjectSavedDir() / TEXT("FromSketch");
@@ -35,7 +82,7 @@ void FFromLZSketchProcessor::ProcessLatestSketch(UWorld* World)
 	UE_LOG(LogTemp, Log, TEXT("ProcessSketch: sketch=%s (%dx%d)"), *SketchPng, SW, SH);
 
 	// 2) Latest captured line-art (black lines on white) from FromLZCaptures.
-	const FString CapturePng = FindLatestPng(CaptureDir);
+	const FString CapturePng = FindLatestPng(CaptureDir, /*bExcludeFacesPng*/ true);
 	TArray<uint8> CapturePixels;
 	int32 CW = 0;
 	int32 CH = 0;
@@ -47,6 +94,23 @@ void FFromLZSketchProcessor::ProcessLatestSketch(UWorld* World)
 	else
 	{
 		UE_LOG(LogTemp, Warning, TEXT("ProcessSketch: no usable PNG in %s; composite will contain sketch lines only."), *CaptureDir);
+	}
+
+	// 2b) Fit the sketch to the camera render resolution (the capture/faces resolution)
+	//     by a center-preserving crop/pad (no scaling), so the composite, cap polygons,
+	//     faces image and camera projection all share one pixel coordinate frame.
+	if (bHasCapture)
+	{
+		if (SW != CW || SH != CH)
+		{
+			TArray<uint8> Fitted;
+			CenterFitRGBA(SketchPixels, SW, SH, CW, CH, Fitted);
+			SketchPixels = MoveTemp(Fitted);
+			UE_LOG(LogTemp, Log, TEXT("ProcessSketch: center-fit sketch %dx%d -> render %dx%d"), SW, SH, CW, CH);
+			SW = CW;
+			SH = CH;
+		}
+		SaveRGBAToPng(SketchPixels, SW, SH, ProcessDir / TEXT("Sketch_fitted.png"));
 	}
 
 	// 3) Composite onto a clean white canvas at the sketch resolution:
@@ -118,9 +182,13 @@ void FFromLZSketchProcessor::ProcessLatestSketch(UWorld* World)
 		Source.SketchPngRel = TEXT("FromSketch/") + FPaths::GetCleanFilename(SketchPng);
 		if (bHasCapture)
 		{
-			const FString CaptureStem = FPaths::GetBaseFilename(CapturePng); // FromLZ_<timestamp>
+			FString CaptureStem = FPaths::GetBaseFilename(CapturePng); // FromLZ_<timestamp>
+			if (CaptureStem.EndsWith(TEXT("_faces")))
+			{
+				CaptureStem.LeftChopInline(6);
+			}
 			Source.CaptureStem = CaptureStem;
-			Source.CapturePngRel = TEXT("FromLZCaptures/") + FPaths::GetCleanFilename(CapturePng);
+			Source.CapturePngRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT(".png");
 			Source.CaptureJsonRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT(".json");
 			Source.FacesPngRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT("_faces.png");
 			Source.FacesJsonRel = TEXT("FromLZCaptures/") + CaptureStem + TEXT("_faces.json");
@@ -190,7 +258,7 @@ bool FFromLZSketchProcessor::SaveRGBAToPng(const TArray<uint8>& RGBAPixels, int3
 	);
 }
 
-FString FFromLZSketchProcessor::FindLatestPng(const FString& Directory)
+FString FFromLZSketchProcessor::FindLatestPng(const FString& Directory, bool bExcludeFacesPng)
 {
 	TArray<FString> Filenames;
 	IFileManager::Get().FindFiles(Filenames, *(Directory / TEXT("*.png")), true, false);
@@ -205,6 +273,11 @@ FString FFromLZSketchProcessor::FindLatestPng(const FString& Directory)
 
 	for (const FString& Filename : Filenames)
 	{
+		if (bExcludeFacesPng && FPaths::GetBaseFilename(Filename).EndsWith(TEXT("_faces")))
+		{
+			continue;
+		}
+
 		const FString FullPath = Directory / Filename;
 		const FFileStatData Stat = IFileManager::Get().GetStatData(*FullPath);
 		if (Stat.ModificationTime > LatestTime)

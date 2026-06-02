@@ -129,13 +129,26 @@ namespace FromLZImageOps
 	{
 		bool bFound = false;
 		bool bUsedBlack = false;          // loop required black strokes to close
-		bool bHasInteriorGreen = false;   // a (non-side) green stroke lies inside the cap -> excavate
+		bool bHasInteriorGreen = false;   // a sufficiently large green segment lies inside the cap -> excavate
+		int32 InteriorGreenStrokeId = -1; // green stroke that passed the interior threshold test
+		int32 InteriorGreenInsidePoints = 0;
+		int32 InteriorGreenTotalPoints = 0;
+		double InteriorGreenInsideRatio = 0.0;
+		double InteriorGreenInsideLength = 0.0;
+		double InteriorGreenStrokeLength = 0.0;
 		TArray<int32> CapStrokeIds;       // input-stroke indices forming the cap loop
 		int32 SideStrokeId = -1;          // longest green stroke used as the extrusion side
 		FVector2D SideVector = FVector2D::ZeroVector; // green chord vector (end - start)
 		FStroke CapPolygon;               // ordered closed loop points
 		FStroke CapPolygonTranslated;     // CapPolygon + SideVector
 		TArray<FVector2D> CapNodes;       // ordered loop vertices (junction points)
+
+		// Every green stroke connected to this cap (chord vectors + endpoint segments,
+		// each oriented away from the cap centre). Step 10 tests the candidate-face
+		// normal against ALL of these; passing any one is enough.
+		TArray<FVector2D> SideCandidateVectors;  // chord vectors (end - start)
+		TArray<FVector2D> SideCandidateStarts;   // chord start (near-cap end)
+		TArray<FVector2D> SideCandidateEnds;     // chord end (far-from-cap end)
 	};
 
 	// Step 9: detect every red cap loop in one pipeline run and recover its extrusion.
