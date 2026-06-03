@@ -1,9 +1,9 @@
 {
-	"capture_timestamp": "20260603_211838",
-	"json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_211838.json",
-	"png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_211838.png",
-	"actor_material_png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_211838_actor_material_id.png",
-	"actor_material_json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_211838_actor_material_id.json",
+	"capture_timestamp": "20260603_220617",
+	"json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_220617.json",
+	"png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_220617.png",
+	"actor_material_png_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_220617_actor_material_id.png",
+	"actor_material_json_path": "../../../../UE_Proj/Test_0529_1510/Saved/FromLZCaptures/FromLZ_20260603_220617_actor_material_id.json",
 	"pawn":
 	{
 		"object_name": "FromLZCameraPawn_0",
@@ -513,7 +513,7 @@
 			"ActorGuid":
 			{
 				"cpp_type": "FGuid",
-				"value_text": "88CF911346D8C5C2F86653867B20666A"
+				"value_text": "BEE7850041CF8F6AC8D7FFA5FE03A68A"
 			},
 			"ActorInstanceGuid":
 			{
@@ -734,11 +734,11 @@
 	},
 	"pawn_transform":
 	{
-		"location_x": 185.0139617897388,
-		"location_y": 634.12510391423837,
-		"location_z": -220.679086321331,
+		"location_x": -150.8814925623922,
+		"location_y": 232.01588114473063,
+		"location_z": 80.939148202568049,
 		"pitch": 0,
-		"yaw": 23.859479000000007,
+		"yaw": 47.661525000000019,
 		"roll": 0,
 		"scale_x": 1,
 		"scale_y": 1,
@@ -1144,12 +1144,12 @@
 	},
 	"camera_component_transform":
 	{
-		"location_x": -552.75959771351938,
-		"location_y": -566.36784076445213,
-		"location_z": 694.14705272071933,
-		"pitch": -32.993191305548827,
-		"yaw": 58.426827603164767,
-		"roll": -1.0807439508005165e-13,
+		"location_x": -820.72714821470288,
+		"location_y": -606.85018327702721,
+		"location_z": 617.23246679350279,
+		"pitch": -26.545675292611815,
+		"yaw": 51.39217168849116,
+		"roll": 3.5553672756905993e-15,
 		"scale_x": 1,
 		"scale_y": 1,
 		"scale_z": 1
@@ -1163,7 +1163,7 @@
 			"TargetArmLength":
 			{
 				"cpp_type": "float",
-				"value_text": "1680.000000"
+				"value_text": "1200.000000"
 			},
 			"SocketOffset":
 			{
@@ -1288,7 +1288,7 @@
 			"RelativeRotation":
 			{
 				"cpp_type": "FRotator",
-				"value_text": "(Pitch=-32.993191,Yaw=34.567349,Roll=-0.000000)"
+				"value_text": "(Pitch=-26.545675,Yaw=3.730647,Roll=0.000000)"
 			},
 			"RelativeScale3D":
 			{
@@ -1504,12 +1504,12 @@
 	},
 	"camera_boom_transform":
 	{
-		"location_x": 185.0139617897388,
-		"location_y": 634.12510391423837,
-		"location_z": -220.679086321331,
-		"pitch": -32.993191305548784,
-		"yaw": 58.426827603164703,
-		"roll": -1.1186647911794813e-13,
+		"location_x": -150.8814925623922,
+		"location_y": 232.01588114473063,
+		"location_z": 80.939148202568049,
+		"pitch": -26.545675292611808,
+		"yaw": 51.392171688491139,
+		"roll": 3.5553672756905993e-15,
 		"scale_x": 1,
 		"scale_y": 1,
 		"scale_z": 1
