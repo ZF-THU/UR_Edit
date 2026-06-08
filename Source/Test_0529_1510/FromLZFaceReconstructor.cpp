@@ -3953,28 +3953,19 @@ namespace
 		return SignedDistance * SignedDistance;
 	}
 
-	static bool ScoreMeshAgainstSourceFace(
+	static bool ComputeAverageProbeDistanceToMesh(
 		const UE::Geometry::FDynamicMesh3& Mesh,
 		const TArray<FVector>& ProbePoints,
-		const FVector& ExpectedNormal,
-		double& OutScore,
-		int32& OutMatchedProbeCount)
+		double& OutAverageDistance)
 	{
-		OutScore = TNumericLimits<double>::Max();
-		OutMatchedProbeCount = 0;
+		OutAverageDistance = TNumericLimits<double>::Max();
 		if (Mesh.TriangleCount() <= 0 || ProbePoints.Num() == 0)
 		{
 			return false;
 		}
 
-		constexpr double ProbeToleranceCm = 5.0;
-		constexpr double ProbeToleranceSq = ProbeToleranceCm * ProbeToleranceCm;
-		constexpr double NormalDotTolerance = 0.90;
-		const FVector Normal = ExpectedNormal.GetSafeNormal();
-		const bool bCheckNormal = !Normal.IsNearlyZero();
 		double DistanceSum = 0.0;
 		int32 ValidProbeCount = 0;
-		int32 MatchedProbeCount = 0;
 
 		for (const FVector& Probe : ProbePoints)
 		{
@@ -3984,7 +3975,6 @@ namespace
 			}
 
 			double BestDistanceSq = TNumericLimits<double>::Max();
-			double BestNormalDot = 0.0;
 			for (int32 TriangleId : Mesh.TriangleIndicesItr())
 			{
 				const UE::Geometry::FIndex3i Tri = Mesh.GetTriangle(TriangleId);
@@ -4003,8 +3993,6 @@ namespace
 				if (DistanceSq < BestDistanceSq)
 				{
 					BestDistanceSq = DistanceSq;
-					const FVector TriNormal = FVector::CrossProduct(B - A, C - A).GetSafeNormal();
-					BestNormalDot = bCheckNormal && !TriNormal.IsNearlyZero() ? FMath::Abs(FVector::DotProduct(TriNormal, Normal)) : 1.0;
 				}
 			}
 
@@ -4012,10 +4000,6 @@ namespace
 			{
 				++ValidProbeCount;
 				DistanceSum += FMath::Sqrt(BestDistanceSq);
-				if (BestDistanceSq <= ProbeToleranceSq && BestNormalDot >= NormalDotTolerance)
-				{
-					++MatchedProbeCount;
-				}
 			}
 		}
 
@@ -4024,10 +4008,8 @@ namespace
 			return false;
 		}
 
-		OutScore = DistanceSum / double(ValidProbeCount);
-		OutMatchedProbeCount = MatchedProbeCount;
-		const int32 RequiredMatches = FMath::Max(1, FMath::CeilToInt(double(ValidProbeCount) * 0.75));
-		return MatchedProbeCount >= RequiredMatches;
+		OutAverageDistance = DistanceSum / double(ValidProbeCount);
+		return FMath::IsFinite(OutAverageDistance);
 	}
 
 	static bool StringEqualsNonEmpty(const FString& A, const FString& B)
@@ -4173,7 +4155,7 @@ namespace
 			UE_LOG(
 				LogTemp,
 				Warning,
-				TEXT("Step10Diag: attach material id lookup failed; fallback to vertex color source_face_id=%d attach_actor=%s error=%s."),
+				TEXT("Step10Diag: attach material id lookup failed; falling back to nearest visible geometry source_face_id=%d attach_actor=%s error=%s."),
 				MeshData.SourceFaceId,
 				*MeshData.ActorName,
 				*Selection.Error);
@@ -4202,7 +4184,7 @@ namespace
 			UE_LOG(
 				LogTemp,
 				Warning,
-				TEXT("Step10Diag: attach material id matched actor=%s component=%s slot=%d, but source component was not found and material_path could not be loaded; fallback to vertex color attach_actor=%s."),
+				TEXT("Step10Diag: attach material id matched actor=%s component=%s slot=%d, but source component was not found and material_path could not be loaded; falling back to nearest visible geometry attach_actor=%s."),
 				*Selection.Entry.ActorName,
 				*Selection.Entry.ComponentName,
 				Selection.Entry.MaterialSlot,
@@ -4221,7 +4203,7 @@ namespace
 			UE_LOG(
 				LogTemp,
 				Warning,
-				TEXT("Step10Diag: attach material id source component found but material is null actor=%s component=%s slot=%d material_path=%s; fallback to vertex color attach_actor=%s."),
+				TEXT("Step10Diag: attach material id source component found but material is null actor=%s component=%s slot=%d material_path=%s; falling back to nearest visible geometry attach_actor=%s."),
 				*GetNameSafe(SourceComponent->GetOwner()),
 				*GetNameSafe(SourceComponent),
 				MaterialSlot,
@@ -4257,7 +4239,10 @@ namespace
 
 		if (MeshData.AttachMaterialId.bLookupAttempted)
 		{
-			return ResolveAttachMaterialFromIdSelection(World, MeshData, SelfComponent);
+			if (UMaterialInterface* IdMaterial = ResolveAttachMaterialFromIdSelection(World, MeshData, SelfComponent))
+			{
+				return IdMaterial;
+			}
 		}
 
 		TArray<FVector> ProbePoints = MeshData.SourceMaterialProbePointsWorld;
@@ -4272,28 +4257,34 @@ namespace
 
 		UPrimitiveComponent* BestComponent = nullptr;
 		UMaterialInterface* BestMaterial = nullptr;
-		double BestScore = TNumericLimits<double>::Max();
-		int32 BestMatchedProbeCount = 0;
+		double BestAverageDistance = TNumericLimits<double>::Max();
 
 		auto ConsiderComponent = [&](UPrimitiveComponent* Component, UE::Geometry::FDynamicMesh3& CandidateMesh)
 		{
-			if (!Component || Component == SelfComponent)
+			if (!Component ||
+				Component == SelfComponent ||
+				!Component->IsRegistered() ||
+				!Component->IsVisible())
 			{
 				return;
 			}
 
-			double Score = TNumericLimits<double>::Max();
-			int32 MatchedProbeCount = 0;
-			if (!ScoreMeshAgainstSourceFace(CandidateMesh, ProbePoints, MeshData.SourcePlaneNormal, Score, MatchedProbeCount))
+			UMaterialInterface* CandidateMaterial = Component->GetMaterial(0);
+			if (!CandidateMaterial)
 			{
 				return;
 			}
-			if (MatchedProbeCount > BestMatchedProbeCount || (MatchedProbeCount == BestMatchedProbeCount && Score < BestScore))
+
+			double AverageDistance = TNumericLimits<double>::Max();
+			if (!ComputeAverageProbeDistanceToMesh(CandidateMesh, ProbePoints, AverageDistance))
+			{
+				return;
+			}
+			if (AverageDistance < BestAverageDistance)
 			{
 				BestComponent = Component;
-				BestMaterial = Component->GetMaterial(0);
-				BestScore = Score;
-				BestMatchedProbeCount = MatchedProbeCount;
+				BestMaterial = CandidateMaterial;
+				BestAverageDistance = AverageDistance;
 			}
 		};
 
@@ -4310,7 +4301,7 @@ namespace
 			for (UStaticMeshComponent* Component : StaticComponents)
 			{
 				UE::Geometry::FDynamicMesh3 CandidateMesh;
-				if (BuildDynamicMeshFromStaticMeshComponent(Component, CandidateMesh, false))
+				if (BuildDynamicMeshFromStaticMeshComponent(Component, CandidateMesh))
 				{
 					ConsiderComponent(Component, CandidateMesh);
 				}
@@ -4321,7 +4312,7 @@ namespace
 			for (UProceduralMeshComponent* Component : ProceduralComponents)
 			{
 				UE::Geometry::FDynamicMesh3 CandidateMesh;
-				if (BuildDynamicMeshFromProceduralMeshComponent(Component, CandidateMesh, false))
+				if (BuildDynamicMeshFromProceduralMeshComponent(Component, CandidateMesh))
 				{
 					ConsiderComponent(Component, CandidateMesh);
 				}
@@ -4333,13 +4324,13 @@ namespace
 			UE_LOG(
 				LogTemp,
 				Log,
-				TEXT("Step10Diag: attach material inherited source_actor=%s source_component=%s source_face_id=%d material_slot=0 material=%s matched_probe_count=%d score_cm=%.6f attach_actor=%s."),
+				TEXT("Step10Diag: attach material inherited from nearest visible geometry source_actor=%s source_component=%s source_face_id=%d material_slot=0 material=%s average_probe_distance_cm=%.6f probe_count=%d attach_actor=%s."),
 				*GetNameSafe(BestComponent->GetOwner()),
 				*GetNameSafe(BestComponent),
 				MeshData.SourceFaceId,
 				*GetNameSafe(BestMaterial),
-				BestMatchedProbeCount,
-				BestScore,
+				BestAverageDistance,
+				ProbePoints.Num(),
 				*MeshData.ActorName);
 			return BestMaterial;
 		}
@@ -4347,7 +4338,7 @@ namespace
 		UE_LOG(
 			LogTemp,
 			Warning,
-			TEXT("Step10Diag: attach material fallback to vertex color; no source component matched source_face_id=%d attach_actor=%s probe_count=%d."),
+			TEXT("Step10Diag: attach material fallback to vertex color; no visible material-bearing source component could be scored source_face_id=%d attach_actor=%s probe_count=%d."),
 			MeshData.SourceFaceId,
 			*MeshData.ActorName,
 			ProbePoints.Num());

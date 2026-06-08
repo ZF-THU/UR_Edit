@@ -152,17 +152,24 @@ namespace FromLZImageOps
 		TArray<int32> CapStrokeIds;       // source/connector stroke indices forming the cap loop
 		FString CandidateSource;          // red_only, local_black, or fallback_trace
 		int32 CandidateAnchorStrokeId = -1;
-		int32 SideStrokeId = -1;          // longest green stroke used as the extrusion side
-		FVector2D SideVector = FVector2D::ZeroVector; // selected green chord from cap endpoint to copy endpoint
+		int32 SideStrokeId = -1;          // local green seed selected for the extrusion side
+		FVector2D SideVector = FVector2D::ZeroVector; // traced ChainEnd - ChainStart
+		double SideLength = 0.0;
+		FVector2D SideChainStart = FVector2D::ZeroVector;
+		FVector2D SideChainEnd = FVector2D::ZeroVector;
+		FVector2D SideSeedDirection = FVector2D::ZeroVector;
+		TArray<int32> SideChainStrokeIds;
+		double SideTraceTotalGap = 0.0;
+		FString SideTraceStopReason;
 		FStroke CapPolygon;               // ordered closed loop points
 		FStroke CapPolygonTranslated;     // CapPolygon + SideVector
 		TArray<FVector2D> CapNodes;       // ordered loop vertices (junction points)
 
-		// Selected green side stroke (chord vector + endpoint segment), oriented from
-		// the endpoint closest to the cap boundary toward the copied cap.
-		TArray<FVector2D> SideCandidateVectors;  // chord vectors (end - start)
-		TArray<FVector2D> SideCandidateStarts;   // chord start (near-cap end)
-		TArray<FVector2D> SideCandidateEnds;     // chord end (far-from-cap end)
+		// Selected side candidate. Its traced ChainStart-to-ChainEnd vector determines
+		// both SideVector direction and SideLength; seed direction is retained for diagnostics.
+		TArray<FVector2D> SideCandidateVectors;
+		TArray<FVector2D> SideCandidateStarts;
+		TArray<FVector2D> SideCandidateEnds;
 	};
 
 	// Step 9: detect every red cap loop in one pipeline run and recover its extrusion.
