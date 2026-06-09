@@ -154,7 +154,8 @@ namespace FromLZImageOps
 		int32 CandidateAnchorStrokeId = -1;
 		int32 SideStrokeId = -1;          // local green seed selected for the extrusion side
 		FVector2D SideVector = FVector2D::ZeroVector; // traced ChainEnd - ChainStart
-		double SideLength = 0.0;
+		double SideLength = 0.0;          // endpoint displacement used for cap translation
+		double SideChainPathLength = 0.0; // full traced arc plus endpoint connection gaps
 		FVector2D SideChainStart = FVector2D::ZeroVector;
 		FVector2D SideChainEnd = FVector2D::ZeroVector;
 		FVector2D SideSeedDirection = FVector2D::ZeroVector;
@@ -165,8 +166,8 @@ namespace FromLZImageOps
 		FStroke CapPolygonTranslated;     // CapPolygon + SideVector
 		TArray<FVector2D> CapNodes;       // ordered loop vertices (junction points)
 
-		// Selected side candidate. Its traced ChainStart-to-ChainEnd vector determines
-		// both SideVector direction and SideLength; seed direction is retained for diagnostics.
+		// Selected full green chain. Candidates are compared by path length, then the
+		// selected chain is oriented from its cap-near endpoint to its cap-far endpoint.
 		TArray<FVector2D> SideCandidateVectors;
 		TArray<FVector2D> SideCandidateStarts;
 		TArray<FVector2D> SideCandidateEnds;

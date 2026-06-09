@@ -4840,53 +4840,38 @@ namespace FromLZImageOps
 		FVector2D ChainEnd = FVector2D::ZeroVector;
 		FVector2D SeedDirection = FVector2D::ZeroVector;
 		double SideLength = 0.0;
+		double PathLength = 0.0;
 		double TotalGap = 0.0;
 		FString StopReason;
 	};
 
-	static FGreenSideTraceCandidate TraceGreenSideFromSeed(
+	struct FGreenTraceEnd
+	{
+		FVector2D Position = FVector2D::ZeroVector;
+		FVector2D OutwardDirection = FVector2D::ZeroVector;
+	};
+
+	static FString TraceGreenChainEnd(
 		const TArray<FColoredStroke>& Strokes,
 		const TArray<int32>& AllGreen,
-		int32 SeedStrokeId,
-		const FStroke& CapPolygon)
+		TSet<int32>& VisitedGreenIds,
+		FGreenTraceEnd& ChainEnd,
+		bool bPrepend,
+		TArray<int32>& ChainStrokeIds,
+		double& TotalGap)
 	{
-		FGreenSideTraceCandidate Out;
-		Out.SeedStrokeId = SeedStrokeId;
-		if (!Strokes.IsValidIndex(SeedStrokeId) || Strokes[SeedStrokeId].Points.Num() < 2)
-		{
-			Out.StopReason = TEXT("invalid_seed");
-			return Out;
-		}
-
-		const FStroke& SeedPoints = Strokes[SeedStrokeId].Points;
-		const double DistToStart = DistancePointToPolylineSquared(SeedPoints[0], CapPolygon);
-		const double DistToEnd = DistancePointToPolylineSquared(SeedPoints.Last(), CapPolygon);
-		Out.ChainStart = DistToStart <= DistToEnd ? SeedPoints[0] : SeedPoints.Last();
-		Out.ChainEnd = DistToStart <= DistToEnd ? SeedPoints.Last() : SeedPoints[0];
-		Out.SeedDirection = (Out.ChainEnd - Out.ChainStart).GetSafeNormal();
-		if (Out.SeedDirection.IsNearlyZero())
-		{
-			Out.StopReason = TEXT("zero_seed_direction");
-			return Out;
-		}
-
-		TSet<int32> VisitedGreenIds;
-		VisitedGreenIds.Add(SeedStrokeId);
-		Out.ChainStrokeIds.Add(SeedStrokeId);
-
 		const double EndpointTolSq = GreenTraceEndpointTolPx * GreenTraceEndpointTolPx;
 		const double MinDirectionDot = FMath::Cos(FMath::DegreesToRadians(GreenTraceMaxChainDeviationDeg));
 
 		for (;;)
 		{
-			const FVector2D ChainDirection = (Out.ChainEnd - Out.ChainStart).GetSafeNormal();
-			if (ChainDirection.IsNearlyZero())
+			if (ChainEnd.OutwardDirection.IsNearlyZero())
 			{
-				Out.StopReason = TEXT("zero_chain_direction");
-				break;
+				return TEXT("zero_chain_direction");
 			}
 
 			int32 BestStrokeId = -1;
+			FVector2D BestNearEndpoint = FVector2D::ZeroVector;
 			FVector2D BestFarEndpoint = FVector2D::ZeroVector;
 			double BestDirectionDot = -1.0;
 			double BestGapSq = TNumericLimits<double>::Max();
@@ -4905,7 +4890,7 @@ namespace FromLZImageOps
 				{
 					const FVector2D NearEndpoint = EndpointIndex == 0 ? CandidatePoints[0] : CandidatePoints.Last();
 					const FVector2D FarEndpoint = EndpointIndex == 0 ? CandidatePoints.Last() : CandidatePoints[0];
-					const double GapSq = FVector2D::DistSquared(Out.ChainEnd, NearEndpoint);
+					const double GapSq = FVector2D::DistSquared(ChainEnd.Position, NearEndpoint);
 					if (GapSq > EndpointTolSq)
 					{
 						continue;
@@ -4923,7 +4908,8 @@ namespace FromLZImageOps
 						continue;
 					}
 
-					const double DirectionDot = FVector2D::DotProduct(ChainDirection, CandidateDirection);
+					const double DirectionDot = FVector2D::DotProduct(
+						ChainEnd.OutwardDirection, CandidateDirection);
 					if (DirectionDot <= MinDirectionDot)
 					{
 						continue;
@@ -4935,6 +4921,7 @@ namespace FromLZImageOps
 							(BestStrokeId < 0 || GreenStrokeId < BestStrokeId)))
 					{
 						BestStrokeId = GreenStrokeId;
+						BestNearEndpoint = NearEndpoint;
 						BestFarEndpoint = FarEndpoint;
 						BestDirectionDot = DirectionDot;
 						BestGapSq = GapSq;
@@ -4946,32 +4933,119 @@ namespace FromLZImageOps
 			{
 				if (!bFoundNearbyEndpoint)
 				{
-					Out.StopReason = TEXT("no_nearby_green");
+					return TEXT("no_nearby_green");
 				}
-				else if (!bFoundUnvisitedNearbyEndpoint)
+				if (!bFoundUnvisitedNearbyEndpoint)
 				{
-					Out.StopReason = TEXT("all_nearby_green_visited");
+					return TEXT("all_nearby_green_visited");
 				}
-				else
-				{
-					Out.StopReason = TEXT("no_chain_direction_match");
-				}
-				break;
+				return TEXT("no_chain_direction_match");
 			}
 
 			VisitedGreenIds.Add(BestStrokeId);
-			Out.ChainStrokeIds.Add(BestStrokeId);
-			Out.TotalGap += FMath::Sqrt(BestGapSq);
-			Out.ChainEnd = BestFarEndpoint;
+			if (bPrepend)
+			{
+				ChainStrokeIds.Insert(BestStrokeId, 0);
+			}
+			else
+			{
+				ChainStrokeIds.Add(BestStrokeId);
+			}
+			TotalGap += FMath::Sqrt(BestGapSq);
+			ChainEnd.Position = BestFarEndpoint;
+			ChainEnd.OutwardDirection = (BestFarEndpoint - BestNearEndpoint).GetSafeNormal();
+		}
+	}
+
+	static FGreenSideTraceCandidate TraceGreenSideFromSeed(
+		const TArray<FColoredStroke>& Strokes,
+		const TArray<int32>& AllGreen,
+		int32 SeedStrokeId,
+		const FStroke& CapPolygon)
+	{
+		FGreenSideTraceCandidate Out;
+		Out.SeedStrokeId = SeedStrokeId;
+		if (!Strokes.IsValidIndex(SeedStrokeId) || Strokes[SeedStrokeId].Points.Num() < 2)
+		{
+			Out.StopReason = TEXT("invalid_seed");
+			return Out;
+		}
+
+		const FStroke& SeedPoints = Strokes[SeedStrokeId].Points;
+		Out.SeedDirection = (SeedPoints.Last() - SeedPoints[0]).GetSafeNormal();
+		if (Out.SeedDirection.IsNearlyZero())
+		{
+			Out.StopReason = TEXT("zero_seed_direction");
+			return Out;
+		}
+
+		TSet<int32> VisitedGreenIds;
+		VisitedGreenIds.Add(SeedStrokeId);
+		Out.ChainStrokeIds.Add(SeedStrokeId);
+
+		FGreenTraceEnd FirstEnd;
+		FirstEnd.Position = SeedPoints[0];
+		FirstEnd.OutwardDirection = (SeedPoints[0] - SeedPoints.Last()).GetSafeNormal();
+		FGreenTraceEnd LastEnd;
+		LastEnd.Position = SeedPoints.Last();
+		LastEnd.OutwardDirection = (SeedPoints.Last() - SeedPoints[0]).GetSafeNormal();
+
+		const FString FirstStopReason = TraceGreenChainEnd(
+			Strokes, AllGreen, VisitedGreenIds, FirstEnd, true,
+			Out.ChainStrokeIds, Out.TotalGap);
+		const FString LastStopReason = TraceGreenChainEnd(
+			Strokes, AllGreen, VisitedGreenIds, LastEnd, false,
+			Out.ChainStrokeIds, Out.TotalGap);
+
+		const double FirstDistanceToCapSq =
+			DistancePointToPolylineSquared(FirstEnd.Position, CapPolygon);
+		const double LastDistanceToCapSq =
+			DistancePointToPolylineSquared(LastEnd.Position, CapPolygon);
+		if (FirstDistanceToCapSq <= LastDistanceToCapSq)
+		{
+			Out.ChainStart = FirstEnd.Position;
+			Out.ChainEnd = LastEnd.Position;
+		}
+		else
+		{
+			Out.ChainStart = LastEnd.Position;
+			Out.ChainEnd = FirstEnd.Position;
+			Algo::Reverse(Out.ChainStrokeIds);
+		}
+
+		Out.PathLength = Out.TotalGap;
+		for (int32 GreenStrokeId : Out.ChainStrokeIds)
+		{
+			if (Strokes.IsValidIndex(GreenStrokeId))
+			{
+				Out.PathLength += StrokeArcLength(Strokes[GreenStrokeId]);
+			}
 		}
 
 		Out.SideLength = FVector2D::Distance(Out.ChainStart, Out.ChainEnd);
 		Out.bValid = Out.SideLength > 0.0;
+		Out.StopReason = FString::Printf(
+			TEXT("bidirectional:first=%s,last=%s"), *FirstStopReason, *LastStopReason);
 		return Out;
 	}
 
-	// Trace every local green seed through direction-compatible green fragments.
-	// The selected chain endpoints determine both the side direction and length.
+	static FString MakeGreenChainKey(const TArray<int32>& ChainStrokeIds)
+	{
+		TArray<int32> SortedIds = ChainStrokeIds;
+		SortedIds.Sort();
+
+		FString Key;
+		for (int32 StrokeId : SortedIds)
+		{
+			Key += FString::Printf(TEXT("%d,"), StrokeId);
+		}
+		return Key;
+	}
+
+	// Local green strokes only seed discovery. Each seed is traced from both ends,
+	// duplicate chains are removed, and the longest full path is selected. The
+	// selected path is oriented only after tracing, from its cap-near endpoint to
+	// its cap-far endpoint.
 	static void ApplyGreenSideForCap(
 		const TArray<FColoredStroke>& Strokes,
 		const TArray<int32>& AllGreen,
@@ -4984,6 +5058,7 @@ namespace FromLZImageOps
 		Out.SideStrokeId = -1;
 		Out.SideVector = FVector2D::ZeroVector;
 		Out.SideLength = 0.0;
+		Out.SideChainPathLength = 0.0;
 		Out.SideChainStart = FVector2D::ZeroVector;
 		Out.SideChainEnd = FVector2D::ZeroVector;
 		Out.SideSeedDirection = FVector2D::ZeroVector;
@@ -4992,11 +5067,28 @@ namespace FromLZImageOps
 		Out.SideTraceStopReason = TEXT("no_local_green_seed");
 
 		FGreenSideTraceCandidate Best;
+		TSet<FString> SeenChainKeys;
 		for (int32 SeedStrokeId : LocalGreenSeeds)
 		{
 			const FGreenSideTraceCandidate Candidate =
 				TraceGreenSideFromSeed(Strokes, AllGreen, SeedStrokeId, Out.CapPolygon);
-			if (Candidate.bValid && (!Best.bValid || Candidate.SideLength > Best.SideLength))
+			if (!Candidate.bValid)
+			{
+				continue;
+			}
+
+			const FString ChainKey = MakeGreenChainKey(Candidate.ChainStrokeIds);
+			if (SeenChainKeys.Contains(ChainKey))
+			{
+				continue;
+			}
+			SeenChainKeys.Add(ChainKey);
+
+			const bool bLongerPath = !Best.bValid || Candidate.PathLength > Best.PathLength + 1e-6;
+			const bool bSamePathButLongerChord =
+				Best.bValid && FMath::IsNearlyEqual(Candidate.PathLength, Best.PathLength, 1e-6) &&
+				Candidate.SideLength > Best.SideLength + 1e-6;
+			if (bLongerPath || bSamePathButLongerChord)
 			{
 				Best = Candidate;
 			}
@@ -5007,6 +5099,7 @@ namespace FromLZImageOps
 			const FVector2D ChainVector = Best.ChainEnd - Best.ChainStart;
 			Out.SideStrokeId = Best.SeedStrokeId;
 			Out.SideLength = ChainVector.Size();
+			Out.SideChainPathLength = Best.PathLength;
 			Out.SideChainStart = Best.ChainStart;
 			Out.SideChainEnd = Best.ChainEnd;
 			Out.SideSeedDirection = Best.SeedDirection;
@@ -5114,9 +5207,9 @@ namespace FromLZImageOps
 				SaveGraphJson(TraceStrokes, SelectedGraph, All, CompDir / TEXT("09b_caploop_pruned_graph.json"));
 			}
 
-			// Every local green is an independent seed. Trace from its cap-near endpoint
-			// through all direction-compatible green fragments within 10px. The selected
-			// chain start-to-end vector supplies both extrusion direction and length.
+			// Every local green is an independent discovery seed. Recover its full chain
+			// from both ends, select the longest unique path, then orient that path from
+			// the endpoint nearest the cap toward the endpoint farthest from the cap.
 			TArray<FVector2D> CompRedPts;
 			for (int32 r : Candidate.RealRedStrokeIds) { CompRedPts.Append(TraceStrokes[r].Points); }
 			TArray<int32> LocalGreen;
@@ -5276,6 +5369,7 @@ namespace FromLZImageOps
 		Json += FString::Printf(TEXT("  \"side_stroke_id\": %d,\n"), Res.SideStrokeId);
 		Json += FString::Printf(TEXT("  \"side_vector\": [%.3f, %.3f],\n"), Res.SideVector.X, Res.SideVector.Y);
 		Json += FString::Printf(TEXT("  \"side_length\": %.3f,\n"), Res.SideLength);
+		Json += FString::Printf(TEXT("  \"side_chain_path_length\": %.3f,\n"), Res.SideChainPathLength);
 		Json += FString::Printf(TEXT("  \"side_chain_start\": [%.3f, %.3f],\n"), Res.SideChainStart.X, Res.SideChainStart.Y);
 		Json += FString::Printf(TEXT("  \"side_chain_end\": [%.3f, %.3f],\n"), Res.SideChainEnd.X, Res.SideChainEnd.Y);
 		Json += FString::Printf(TEXT("  \"side_seed_direction\": [%.6f, %.6f],\n"), Res.SideSeedDirection.X, Res.SideSeedDirection.Y);
